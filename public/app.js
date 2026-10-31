@@ -506,6 +506,58 @@ async function print() {
 }
 
 // =====================================================================
+//  MODE: local (direct print) vs queue (submit to the workshop server)
+// =====================================================================
+let CONFIG = { role: 'local', roomRequired: false };
+
+async function fetchConfig() {
+  try { const r = await fetch('/api/config'); if (r.ok) CONFIG = await r.json(); } catch (_) {}
+  applyMode();
+}
+
+function applyMode() {
+  const btn = document.getElementById('printBtn');
+  if (CONFIG.role === 'queue') {
+    btn.textContent = 'send to print';
+    // participants don't pick printers — hide the gear
+    const gear = document.getElementById('settingsBtn');
+    if (gear) gear.style.display = 'none';
+  } else {
+    btn.textContent = 'print';
+    loadPrinters();
+  }
+}
+
+function onPrintClick() { if (CONFIG.role === 'queue') submitJob(); else print(); }
+
+// Submit the finished design to the workshop print queue (eduroam-safe: outbound only).
+async function submitJob() {
+  if (!layers.length) { toast('Add an image first', true); return; }
+  let room = '';
+  if (CONFIG.roomRequired) {
+    room = localStorage.getItem('room_code') || '';
+    if (!room) { room = (prompt('Workshop code (from the facilitator):') || '').trim(); if (!room) return; localStorage.setItem('room_code', room); }
+  }
+  let name = localStorage.getItem('participant_name');
+  if (name === null) { name = (prompt('Your name (optional — shown in the print queue):') || '').trim(); localStorage.setItem('participant_name', name); }
+  toast('Sending to the print queue …');
+  const dataURL = buildPrintCanvas().toDataURL('image/png');
+  const lpOptions = lpOptionString().trim().split(/\s+/);
+  try {
+    const res = await fetch('/api/jobs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataURL, lpOptions, orient: ORIENT, name, room }),
+    });
+    const j = await res.json();
+    if (j.ok) toast('Sent to print queue ✓ — the facilitator will print it');
+    else {
+      toast('Submit failed: ' + (j.error || 'unknown'), true);
+      if (/room/i.test(j.error || '')) localStorage.removeItem('room_code'); // let them re-enter the code
+    }
+  } catch (err) { toast('Submit error: ' + err.message, true); }
+}
+
+// =====================================================================
 //  PRINTERS
 // =====================================================================
 async function loadPrinters(selectPref) {
@@ -587,7 +639,7 @@ function init() {
     applyFormat(); updateOrientBtn();
   });
 
-  document.getElementById('printBtn').addEventListener('click', print);
+  document.getElementById('printBtn').addEventListener('click', onPrintClick);
   document.getElementById('exportBtn').addEventListener('click', exportPNG);
   document.getElementById('refreshPrinters').addEventListener('click', () => { toast('discovering printers…'); loadPrinters(); });
   document.getElementById('addWifiBtn').addEventListener('click', openWifi);
@@ -611,7 +663,7 @@ function init() {
   bindSettings();
   updateOrientBtn();
   applyFormat();
-  loadPrinters();
+  fetchConfig();   // decides local (print) vs queue (send to print); loads printers when local
   syncBar();
   renderThumbs();
 }

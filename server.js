@@ -14,6 +14,15 @@ const { execFile } = require('child_process');
 const PORT = process.env.PORT || 8787;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// --- workshop print queue config ------------------------------------------
+// ROLE 'queue' = the public server that collects designs (no printer attached).
+// ROLE 'local' = your Mac, which prints directly and/or runs the pull agent.
+const ROLE = process.env.ROLE || 'local';
+const JOBS_DIR = process.env.JOBS_DIR || path.join(__dirname, 'jobs');
+const ROOM_CODE = process.env.ROOM_CODE || '';     // required to submit a job, if set
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || ''; // required to list/fetch/manage jobs, if set
+const DEFAULT_LP = '-o PageSize=w288h432 -o print-color-mode=monochrome';
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -146,6 +155,73 @@ async function printImage({ pngBuffer, printer, lpOptions }) {
   return { ok: true, job, stdout: r.stdout.trim() };
 }
 
+// --- print queue (store) ---------------------------------------------------
+
+function ensureJobsDir() { try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch (_) {} }
+function jobMetaPath(id) { return path.join(JOBS_DIR, id + '.json'); }
+function jobPngPath(id)  { return path.join(JOBS_DIR, id + '.png'); }
+function validId(id) { return /^[A-Za-z0-9_-]{6,80}$/.test(id); }
+
+function listJobs() {
+  ensureJobsDir();
+  return fs.readdirSync(JOBS_DIR)
+    .filter(f => f.endsWith('.json'))
+    .map(f => { try { return JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), 'utf8')); } catch (_) { return null; } })
+    .filter(Boolean)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// Facilitator/agent auth. Open when ADMIN_TOKEN is unset (local/dev).
+function adminOK(req) {
+  if (!ADMIN_TOKEN) return true;
+  const tok = req.headers['x-print-token'] || new URL(req.url, 'http://x').searchParams.get('token') || '';
+  return tok === ADMIN_TOKEN;
+}
+
+// --- pull agent (runs on the Mac: fetch approved jobs, print them) ----------
+
+async function runAgent() {
+  const base = (process.env.QUEUE_URL || '').replace(/\/+$/, '');
+  const token = ADMIN_TOKEN;
+  const printer = process.env.PRINTER || '';
+  const auto = process.argv.includes('--auto') || process.env.AUTO === '1';
+  const pollMs = Math.max(1000, Number(process.env.POLL_MS || 4000));
+  const wantStatus = auto ? 'pending' : 'approved';
+  const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
+
+  if (!base)    { console.error('ERROR: set QUEUE_URL (e.g. https://tool.poetic.software)'); process.exit(1); }
+  if (!printer) { console.error('ERROR: set PRINTER (your CUPS queue, e.g. PM643_usb)');     process.exit(1); }
+
+  const hdr = token ? { 'x-print-token': token } : {};
+  console.log(`\n  Print agent → ${base}`);
+  console.log(`  printing ${wantStatus} jobs on "${printer}" ${auto ? '(AUTO)' : '(approve-each via /queue)'} every ${pollMs}ms\n`);
+
+  async function tick() {
+    try {
+      const r = await fetch(`${base}/api/jobs?status=${wantStatus}`, { headers: hdr });
+      if (!r.ok) { console.error('  poll failed:', r.status, r.statusText); return; }
+      const { jobs = [] } = await r.json();
+      for (const job of jobs) {
+        const who = job.name ? ` (${job.name})` : '';
+        console.log(`  → printing ${job.id}${who} …`);
+        const pr = await fetch(`${base}/api/jobs/${job.id}/png`, { headers: hdr });
+        if (!pr.ok) { console.error('    fetch png failed:', pr.status); continue; }
+        const buf = Buffer.from(await pr.arrayBuffer());
+        const result = await printImage({ pngBuffer: buf, printer, lpOptions: (job.lpOptions && job.lpOptions.length) ? job.lpOptions : defLp });
+        if (result.ok) {
+          await fetch(`${base}/api/jobs/${job.id}/done`, { method: 'POST', headers: hdr });
+          console.log(`    ✓ printed ${job.id} ${result.job || ''}`);
+        } else {
+          await fetch(`${base}/api/jobs/${job.id}/fail`, { method: 'POST', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: result.error }) });
+          console.error(`    ✗ failed ${job.id}: ${result.error}`);
+        }
+      }
+    } catch (e) { console.error('  agent error:', e.message); }
+  }
+  await tick();
+  setInterval(tick, pollMs);
+}
+
 // --- static files ----------------------------------------------------------
 
 function serveStatic(req, res) {
@@ -201,6 +277,68 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, r.ok ? 200 : 500, r);
     }
 
+    // ---- workshop print queue ----
+    if (req.method === 'GET' && url === '/api/config') {
+      return sendJSON(res, 200, { role: ROLE, roomRequired: !!ROOM_CODE });
+    }
+
+    // participant submits a finished design (open; gated by room code if set)
+    if (req.method === 'POST' && url === '/api/jobs') {
+      const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+      if (ROOM_CODE && body.room !== ROOM_CODE) return sendJSON(res, 403, { ok: false, error: 'wrong or missing room code' });
+      if (!body.image) return sendJSON(res, 400, { ok: false, error: 'image required' });
+      const png = Buffer.from(body.image.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      if (!png.length) return sendJSON(res, 400, { ok: false, error: 'empty image' });
+      ensureJobsDir();
+      const id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      fs.writeFileSync(jobPngPath(id), png);
+      const meta = {
+        id,
+        name: String(body.name || '').slice(0, 60),
+        orient: body.orient === 'landscape' ? 'landscape' : 'portrait',
+        lpOptions: Array.isArray(body.lpOptions) ? body.lpOptions.slice(0, 20).map(String) : null,
+        bytes: png.length,
+        status: 'pending',
+        createdAt: Date.now(),
+      };
+      fs.writeFileSync(jobMetaPath(id), JSON.stringify(meta));
+      return sendJSON(res, 200, { ok: true, id });
+    }
+
+    // facilitator/agent: list jobs (optionally ?status=pending|approved|done)
+    if (req.method === 'GET' && url === '/api/jobs') {
+      if (!adminOK(req)) return sendJSON(res, 401, { ok: false, error: 'unauthorized' });
+      const status = new URL(req.url, 'http://x').searchParams.get('status');
+      let jobs = listJobs();
+      if (status) jobs = jobs.filter(j => j.status === status);
+      return sendJSON(res, 200, { ok: true, jobs });
+    }
+
+    // facilitator/agent: fetch a job's PNG (token via header or ?token= for <img>)
+    if (req.method === 'GET' && /^\/api\/jobs\/[^/]+\/png$/.test(url)) {
+      if (!adminOK(req)) { res.writeHead(401); return res.end('unauthorized'); }
+      const id = url.split('/')[3];
+      if (!validId(id) || !fs.existsSync(jobPngPath(id))) { res.writeHead(404); return res.end('not found'); }
+      const data = fs.readFileSync(jobPngPath(id));
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': data.length });
+      return res.end(data);
+    }
+
+    // facilitator/agent: approve / reject / done / fail
+    if (req.method === 'POST' && /^\/api\/jobs\/[^/]+\/(approve|reject|done|fail)$/.test(url)) {
+      if (!adminOK(req)) return sendJSON(res, 401, { ok: false, error: 'unauthorized' });
+      const [, , , id, action] = url.split('/');
+      if (!validId(id) || !fs.existsSync(jobMetaPath(id))) return sendJSON(res, 404, { ok: false, error: 'not found' });
+      let body = {};
+      try { body = JSON.parse((await readBody(req)).toString('utf8') || '{}'); } catch (_) {}
+      const meta = JSON.parse(fs.readFileSync(jobMetaPath(id), 'utf8'));
+      meta.status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : action === 'done' ? 'done' : 'error';
+      if (action === 'fail') meta.error = String(body.error || '').slice(0, 300);
+      meta.updatedAt = Date.now();
+      fs.writeFileSync(jobMetaPath(id), JSON.stringify(meta));
+      return sendJSON(res, 200, { ok: true, status: meta.status });
+    }
+
     if (url.startsWith('/api/')) return sendJSON(res, 404, { ok: false, error: 'unknown endpoint' });
 
     return serveStatic(req, res);
@@ -209,10 +347,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Bind localhost-only by default (safe for the local print server on your Mac);
-// containers/remote hosts set HOST=0.0.0.0 so the reverse proxy can reach it.
-const HOST = process.env.HOST || '127.0.0.1';
-server.listen(PORT, HOST, () => {
-  const url = `http://localhost:${PORT}`;
-  console.log(`\n  Postcard Printer running → ${url}  (bind ${HOST}:${PORT})\n`);
-});
+// Run as the Mac-side pull agent (`node server.js --agent`) instead of the server.
+if (process.argv.includes('--agent')) {
+  runAgent();
+} else {
+  // Bind localhost-only by default (safe for the local print server on your Mac);
+  // containers/remote hosts set HOST=0.0.0.0 so the reverse proxy can reach it.
+  const HOST = process.env.HOST || '127.0.0.1';
+  server.listen(PORT, HOST, () => {
+    const url = `http://localhost:${PORT}`;
+    console.log(`\n  Postcard Printer (${ROLE}) running → ${url}  (bind ${HOST}:${PORT})\n`);
+  });
+}

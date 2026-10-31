@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Print Queue</title>
+<link rel="stylesheet" href="style.css" />
+<style>
+  body { overflow: auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  .sub { font-weight: 400; color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .sub b { color: var(--ink); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+       margin: 22px 0 10px; border-bottom: 1px solid var(--muted); padding-bottom: 5px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .job { border: 1px solid var(--ink); display: flex; flex-direction: column; }
+  .job img { width: 100%; height: 150px; object-fit: contain; background: #fff; display: block;
+             border-bottom: 1px solid var(--ink); }
+  .meta { padding: 7px 9px; font-size: 12px; display: flex; justify-content: space-between; gap: 6px; }
+  .meta .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .t { color: var(--muted); font-weight: 400; white-space: nowrap; }
+  .acts { display: flex; gap: 0; }
+  .acts button { flex: 1; border: none; border-top: 1px solid var(--ink); cursor: pointer;
+                 font: 700 13px var(--font); padding: 9px 0; background: var(--ink); color: #fff; }
+  .acts button.rej { background: #fff; color: var(--ink); border-left: 1px solid var(--ink); }
+  .acts button:hover { background: #3a0f24; }
+  .acts button.rej:hover { background: var(--mint); }
+  .small { font-size: 11px; color: var(--muted); padding: 6px 9px 9px; font-weight: 400; }
+  .empty { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .err { color: var(--err); }
+  .pill { display:inline-block; background: var(--mint); color: var(--ink); padding: 1px 7px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>print queue</h1>
+  <div class="sub">
+    <span id="status">connecting…</span> ·
+    pending <b id="cPend">0</b> · approved <b id="cAppr">0</b> · printed <b id="cDone">0</b>
+    · <a href="#" id="reauth" style="color:var(--muted)">token</a>
+  </div>
+
+  <h2>pending — approve to send to the printer</h2>
+  <div id="pending" class="grid"><span class="empty">nothing waiting</span></div>
+
+  <h2>approved — printing on your Mac</h2>
+  <div id="approved" class="grid"><span class="empty">none</span></div>
+
+  <h2>recent</h2>
+  <div id="recent" class="grid"><span class="empty">none</span></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let token = localStorage.getItem('admin_token') || '';
+
+function ensureToken() {
+  if (!token) { token = (prompt('Admin token:') || '').trim(); if (token) localStorage.setItem('admin_token', token); }
+  return token;
+}
+$('#reauth').onclick = e => { e.preventDefault(); localStorage.removeItem('admin_token'); token=''; ensureToken(); poll(); };
+
+const hdr = () => ({ 'x-print-token': token });
+const ago = ts => { const s = Math.round((Date.now()-ts)/1000); if (s<60) return s+'s'; if (s<3600) return Math.round(s/60)+'m'; return Math.round(s/3600)+'h'; };
+
+async function act(id, action) {
+  await fetch(`/api/jobs/${id}/${action}`, { method:'POST', headers: hdr() });
+  poll();
+}
+
+function card(j, actions) {
+  const el = document.createElement('div');
+  el.className = 'job';
+  const thumb = `/api/jobs/${j.id}/png?token=${encodeURIComponent(token)}`;
+  el.innerHTML =
+    `<img src="${thumb}" alt="">` +
+    `<div class="meta"><span class="nm">${j.name ? escapeHtml(j.name) : '—'}</span><span class="t">${ago(j.createdAt)} ago</span></div>` +
+    (j.status === 'error' ? `<div class="small err">${escapeHtml(j.error||'print failed')}</div>` :
+     j.status === 'approved' ? `<div class="small"><span class="pill">printing…</span></div>` :
+     j.status === 'done' ? `<div class="small">printed ✓</div>` :
+     j.status === 'rejected' ? `<div class="small">rejected</div>` : '');
+  if (actions) {
+    const a = document.createElement('div'); a.className = 'acts';
+    a.innerHTML = `<button data-a="approve">print</button><button class="rej" data-a="reject">reject</button>`;
+    a.querySelectorAll('button').forEach(b => b.onclick = () => act(j.id, b.dataset.a));
+    el.appendChild(a);
+  } else if (j.status === 'error') {
+    const a = document.createElement('div'); a.className = 'acts';
+    a.innerHTML = `<button data-a="approve">retry</button><button class="rej" data-a="reject">dismiss</button>`;
+    a.querySelectorAll('button').forEach(b => b.onclick = () => act(j.id, b.dataset.a));
+    el.appendChild(a);
+  }
+  return el;
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function fill(container, jobs, actions) {
+  container.innerHTML = '';
+  if (!jobs.length) { container.innerHTML = '<span class="empty">none</span>'; return; }
+  jobs.forEach(j => container.appendChild(card(j, actions)));
+}
+
+async function poll() {
+  if (!ensureToken()) return;
+  try {
+    const r = await fetch('/api/jobs', { headers: hdr() });
+    if (r.status === 401) { $('#status').innerHTML = '<span class="err">bad token</span>'; localStorage.removeItem('admin_token'); token=''; return; }
+    const { jobs = [] } = await r.json();
+    const pend = jobs.filter(j => j.status === 'pending');
+    const appr = jobs.filter(j => j.status === 'approved');
+    const done = jobs.filter(j => j.status === 'done');
+    const recent = jobs.filter(j => j.status === 'done' || j.status === 'rejected' || j.status === 'error').slice(-12).reverse();
+    $('#cPend').textContent = pend.length;
+    $('#cAppr').textContent = appr.length;
+    $('#cDone').textContent = done.length;
+    fill($('#pending'), pend.slice().reverse(), true);
+    fill($('#approved'), appr.slice().reverse(), false);
+    fill($('#recent'), recent, false);
+    $('#status').textContent = 'live · updated ' + new Date().toLocaleTimeString();
+  } catch (e) { $('#status').innerHTML = '<span class="err">offline</span>'; }
+}
+
+ensureToken();
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>
