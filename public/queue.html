@@ -52,13 +52,15 @@
 const $ = s => document.querySelector(s);
 let token = localStorage.getItem('admin_token') || '';
 
-function ensureToken() {
-  if (!token) { token = (prompt('Admin token:') || '').trim(); if (token) localStorage.setItem('admin_token', token); }
-  return token;
-}
-$('#reauth').onclick = e => { e.preventDefault(); localStorage.removeItem('admin_token'); token=''; ensureToken(); poll(); };
+$('#reauth').onclick = e => {
+  e.preventDefault();
+  const t = (prompt('Admin token (leave blank if none):') || '').trim();
+  token = t;
+  if (t) localStorage.setItem('admin_token', t); else localStorage.removeItem('admin_token');
+  poll();
+};
 
-const hdr = () => ({ 'x-print-token': token });
+const hdr = () => token ? { 'x-print-token': token } : {};
 const ago = ts => { const s = Math.round((Date.now()-ts)/1000); if (s<60) return s+'s'; if (s<3600) return Math.round(s/60)+'m'; return Math.round(s/3600)+'h'; };
 
 async function act(id, action) {
@@ -100,10 +102,13 @@ function fill(container, jobs, actions) {
 }
 
 async function poll() {
-  if (!ensureToken()) return;
   try {
     const r = await fetch('/api/jobs', { headers: hdr() });
-    if (r.status === 401) { $('#status').innerHTML = '<span class="err">bad token</span>'; localStorage.removeItem('admin_token'); token=''; return; }
+    if (r.status === 401) {
+      token = (prompt('Admin token:') || '').trim();
+      if (token) { localStorage.setItem('admin_token', token); return poll(); }
+      $('#status').innerHTML = '<span class="err">token required</span>'; return;
+    }
     const { jobs = [] } = await r.json();
     const pend = jobs.filter(j => j.status === 'pending');
     const appr = jobs.filter(j => j.status === 'approved');
@@ -119,7 +124,6 @@ async function poll() {
   } catch (e) { $('#status').innerHTML = '<span class="err">offline</span>'; }
 }
 
-ensureToken();
 poll();
 setInterval(poll, 3000);
 </script>

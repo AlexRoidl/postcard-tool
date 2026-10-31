@@ -538,8 +538,12 @@ async function submitJob() {
     room = localStorage.getItem('room_code') || '';
     if (!room) { room = (prompt('Workshop code (from the facilitator):') || '').trim(); if (!room) return; localStorage.setItem('room_code', room); }
   }
-  let name = localStorage.getItem('participant_name');
-  if (name === null) { name = (prompt('Your name (optional — shown in the print queue):') || '').trim(); localStorage.setItem('participant_name', name); }
+  let name = localStorage.getItem('participant_name') || '';
+  if (!name) {
+    name = (prompt('Your name:') || '').trim();
+    if (!name) { toast('Please enter a name to print', true); return; }
+    localStorage.setItem('participant_name', name);
+  }
   toast('Sending to the print queue …');
   const dataURL = buildPrintCanvas().toDataURL('image/png');
   const lpOptions = lpOptionString().trim().split(/\s+/);

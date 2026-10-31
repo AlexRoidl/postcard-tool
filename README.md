@@ -73,16 +73,14 @@ Mac) does the printing — especially on networks with client isolation like
 to reach your Mac directly.
 
 - The **public server** (dokploy, `ROLE=queue`) collects designs. Participants open
-  the site, design, and hit **send to print**; the job lands in a queue. Submitting
-  is gated by `ROOM_CODE`; listing/fetching/managing jobs needs `ADMIN_TOKEN`.
-- You review and approve at **`/queue`** (enter the admin token once). Only approved
-  jobs get printed.
+  the site, design, enter a **name**, and hit **send to print**; the job lands in a
+  queue. No login — fine for a short-lived workshop site.
+- You review and approve at **`/queue`**. Only approved jobs get printed.
 - Your **Mac runs the pull agent**, which fetches approved jobs and prints them
   locally via `lp`:
 
   ```bash
   QUEUE_URL=https://tool.poetic.software \
-  ADMIN_TOKEN=<admin-token> \
   PRINTER=PM643_usb \
   node server.js --agent
   ```
@@ -90,8 +88,10 @@ to reach your Mac directly.
   Add `--auto` (or `AUTO=1`) to print every submission immediately, skipping the
   approve step. `POLL_MS` sets the poll interval (default 4000).
 
-Queue-server env: `ROLE=queue`, `ROOM_CODE`, `ADMIN_TOKEN`, and `JOBS_DIR` pointed at
-a mounted volume so the queue survives redeploys.
+Queue-server env: `ROLE=queue` and `JOBS_DIR` pointed at a mounted volume so the
+queue survives redeploys. **Optional auth** (if the site must stay up longer): set
+`ROOM_CODE` to gate submissions and `ADMIN_TOKEN` to gate `/queue` and the agent
+(pass the same `ADMIN_TOKEN` to the agent command).
 
 ## Files
 
