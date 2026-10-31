@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Postcard Printer</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- floating top controls -->
+<div id="top">
+  <div class="cluster">
+    <button id="addImageBtn" class="btn sq" title="Add image (or drop / paste)">+</button>
+    <button id="orientBtn" class="btn" title="Flip orientation">6×4</button>
+  </div>
+  <div class="cluster">
+    <button id="settingsBtn" class="btn sq" title="Printer &amp; options">⚙</button>
+    <button id="exportBtn" class="btn">export</button>
+    <button id="printBtn" class="btn">print</button>
+  </div>
+</div>
+<input id="fileInput" type="file" accept="image/*" multiple hidden />
+
+<!-- left: the images you added -->
+<div id="thumbs"></div>
+
+<!-- center: the postcard -->
+<div id="stage">
+  <div class="wrap"><canvas id="board"></canvas></div>
+</div>
+
+<!-- bottom: controls for the selected image -->
+<div id="imgbar" hidden>
+  <button id="ditherBtn" class="btn" title="Cycle dithering">floyd</button>
+  <span class="ctrl"><i>bri</i><input id="brightness" type="range" min="-100" max="100" step="1" value="0"></span>
+  <span class="ctrl"><i>con</i><input id="contrast" type="range" min="-100" max="100" step="1" value="0"></span>
+  <span class="ctrl"><i>opa</i><input id="opacity" type="range" min="0.05" max="1" step="0.01" value="1"></span>
+  <button id="invertBtn" class="btn" title="Invert">inv</button>
+  <button class="btn" data-act="back" title="Send back">↓</button>
+  <button class="btn" data-act="front" title="Bring front">↑</button>
+  <button class="btn" data-act="del" title="Delete">✕</button>
+</div>
+
+<!-- settings popover (printer + lp options) -->
+<div id="settings" hidden>
+  <label class="row"><b>printer</b>
+    <select id="printerSelect"></select></label>
+  <div class="row">
+    <button id="refreshPrinters" class="btn sq" title="Refresh / discover">⟳</button>
+    <button id="addWifiBtn" class="btn">+ wifi</button>
+  </div>
+  <label class="row"><b>lp options</b><input id="lpOptsInput" type="text"></label>
+</div>
+
+<!-- add-wifi dialog -->
+<div id="wifiModal" hidden>
+  <div class="card">
+    <b>add wifi printer</b>
+    <p>enter the printer's IP (AirPrint / IPP)</p>
+    <input id="wifiIp" type="text" placeholder="192.168.x.x">
+    <input id="wifiName" type="text" placeholder="name (optional)">
+    <div class="row end"><button id="wifiCancel" class="btn">cancel</button><button id="wifiAdd" class="btn solid">add</button></div>
+    <div id="wifiMsg"></div>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

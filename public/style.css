@@ -1,0 +1,159 @@
+/* Postcard Printer — Hershey / poetic.software palette */
+
+@font-face {
+  font-family: "Hershey Simplex Plus";
+  src: url("fonts/HersheySimplexPlus.woff2") format("woff2"),
+       url("fonts/HersheySimplexPlus.ttf") format("truetype");
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: "Hershey Simplex Plus";
+  src: url("fonts/HersheySimplexPlus-Bold.woff2") format("woff2"),
+       url("fonts/HersheySimplexPlus-Bold.ttf") format("truetype");
+  font-weight: 700; font-display: swap;
+}
+
+:root {
+  --font: "Hershey Simplex Plus", ui-monospace, monospace;
+  --bg: #ffffff;      /* page */
+  --ink: #200010;     /* text / dark surfaces */
+  --muted: #58404d;   /* secondary */
+  --mint: #dfffef;    /* accent / active */
+  --sage: #a7bfb2;
+  --err: #ff5a3c;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-weight: 400;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- buttons ---- */
+.btn {
+  appearance: none;
+  background: var(--ink);
+  color: #fff;
+  border: none;
+  border-radius: 0;
+  font: 700 19px/1 var(--font);
+  letter-spacing: .3px;
+  padding: 11px 15px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn:hover { background: #3a0f24; }
+.btn:active { background: var(--ink); }
+.btn.sq { width: 46px; height: 46px; padding: 0; font-size: 24px; }
+.btn.on { background: var(--mint); color: var(--ink); }   /* toggled (e.g. invert) */
+.btn.solid { background: var(--mint); color: var(--ink); }
+
+/* ---- top floating controls ---- */
+#top {
+  position: fixed; top: 14px; left: 14px; right: 14px;
+  display: flex; justify-content: space-between;
+  pointer-events: none; z-index: 20;
+}
+#top .cluster { display: flex; gap: 8px; pointer-events: auto; }
+
+/* ---- center stage + canvas ---- */
+#stage {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+#stage.dragover::after {
+  content: "drop image"; position: absolute; inset: 20px;
+  border: 3px dashed var(--ink); display: grid; place-items: center;
+  font-size: 22px; pointer-events: none; color: var(--ink);
+}
+.wrap { line-height: 0; }
+#board {
+  background: #fff;
+  display: block;
+  border: 1px solid var(--ink);
+  box-shadow: 0 10px 44px rgba(32,0,16,.14);
+  touch-action: none;
+}
+
+/* ---- left thumbnail strip (the images you added) ---- */
+#thumbs {
+  position: fixed; left: 14px; top: 74px; bottom: 74px; width: 72px;
+  display: flex; flex-direction: column; gap: 8px;
+  overflow-y: auto; z-index: 15;
+}
+#thumbs::-webkit-scrollbar { width: 0; }
+.thumb {
+  width: 72px; height: 54px; object-fit: cover; display: block;
+  background: #fff; cursor: pointer;
+  outline: 2px solid var(--muted); outline-offset: 0;
+}
+.thumb.sel { outline: 3px solid var(--ink); }
+
+/* ---- bottom bar: selected-image controls ---- */
+#imgbar {
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; gap: 6px; z-index: 20; max-width: calc(100vw - 28px);
+  flex-wrap: wrap; justify-content: center;
+}
+#imgbar[hidden] { display: none; }
+.ctrl {
+  background: var(--ink); color: #fff;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; height: 46px; font-size: 12px; letter-spacing: .5px;
+}
+.ctrl i { font-style: normal; opacity: .65; text-transform: uppercase; }
+
+/* ---- range inputs ---- */
+input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 92px; height: 3px; background: var(--muted); cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 0;
+  background: var(--mint); border: none;
+}
+
+/* ---- settings popover ---- */
+#settings {
+  position: fixed; top: 70px; right: 14px; z-index: 30;
+  background: var(--ink); color: #fff; padding: 14px; width: min(430px, 92vw);
+  display: flex; flex-direction: column; gap: 10px;
+}
+#settings[hidden] { display: none; }
+.row { display: flex; align-items: center; gap: 8px; }
+.row.end { justify-content: flex-end; }
+#settings b { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; opacity: .7; min-width: 68px; }
+select, input[type=text] {
+  appearance: none; background: var(--ink); color: #fff;
+  border: 2px solid #fff; border-radius: 0; font: 700 14px var(--font);
+  padding: 8px 10px; flex: 1; min-width: 0;
+}
+select:focus, input:focus { outline: none; background: #3a0f24; }
+
+/* ---- wifi modal ---- */
+#wifiModal {
+  position: fixed; inset: 0; background: rgba(32,0,16,.55);
+  display: grid; place-items: center; z-index: 40;
+}
+#wifiModal[hidden] { display: none; }
+.card { background: var(--ink); color: #fff; padding: 22px; width: 330px; display: flex; flex-direction: column; gap: 10px; }
+.card b { font-size: 18px; }
+.card p { margin: 0; font-weight: 400; opacity: .7; font-size: 13px; }
+#wifiMsg { font-weight: 400; font-size: 12px; opacity: .8; min-height: 14px; }
+
+/* ---- toast ---- */
+#toast {
+  position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%);
+  background: var(--ink); color: #fff; padding: 12px 18px; font-size: 14px;
+  z-index: 50; max-width: 80vw; text-align: center;
+}
+#toast[hidden] { display: none; }
+#toast.err { color: var(--err); }

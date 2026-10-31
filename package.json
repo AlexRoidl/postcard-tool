@@ -1,0 +1,13 @@
+{
+  "name": "postcard-printer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "6x4\" dithered-postcard editor with popup-free Phomemo (CUPS) printing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

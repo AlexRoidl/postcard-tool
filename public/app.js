@@ -1,0 +1,619 @@
+/* Postcard Printer — editor.
+ * 4x6" postcard composer with per-image transform + dithering, printed to a
+ * Phomemo (AirPrint) via the local server, popup-free.
+ */
+'use strict';
+
+// ---------- format / resolution ----------
+let DPI = 300;
+let ORIENT = 'landscape';            // 'landscape' = 6x4, 'portrait' = 4x6
+const INCH_LONG = 6, INCH_SHORT = 4;
+let OUT_W = 1800, OUT_H = 1200;      // full-res output pixels (recomputed)
+const PREVIEW_LONG = 840;            // longest preview side in backing px
+let renderScale = 1;                 // output px -> preview canvas px
+
+const board = document.getElementById('board');
+const ctx = board.getContext('2d');
+
+// ---------- state ----------
+let layers = [];                     // bottom -> top
+let selId = null;
+let uid = 1;
+
+function selected() { return layers.find(l => l.id === selId) || null; }
+
+// ---------- lp print options (editable, persisted) ----------
+// PM643 driver: 4x6" label = CUPS page size w288h432 (288x432pt), 300dpi.
+// We send a pixel-exact portrait image, so no fit/rotate options are needed.
+const LP_DEFAULTS = {
+  landscape: '-o PageSize=w288h432 -o print-color-mode=monochrome',
+  portrait:  '-o PageSize=w288h432 -o print-color-mode=monochrome',
+};
+function lpOptionString() {
+  const key = 'lpopts_' + ORIENT;
+  return localStorage.getItem(key) || LP_DEFAULTS[ORIENT];
+}
+function setLpOptionString(v) { localStorage.setItem('lpopts_' + ORIENT, v); }
+
+// =====================================================================
+//  FORMAT
+// =====================================================================
+function applyFormat() {
+  const longPx = Math.round(INCH_LONG * DPI);
+  const shortPx = Math.round(INCH_SHORT * DPI);
+  if (ORIENT === 'landscape') { OUT_W = longPx; OUT_H = shortPx; }
+  else { OUT_W = shortPx; OUT_H = longPx; }
+
+  const scale = PREVIEW_LONG / Math.max(OUT_W, OUT_H);
+  board.width = Math.round(OUT_W * scale);
+  board.height = Math.round(OUT_H * scale);
+  renderScale = board.width / OUT_W;
+
+  layers.forEach(l => { l._bakeKey = null; });  // force rebake at new scale
+  fitCanvas();
+  render();
+}
+
+// Fit the canvas into the stage, leaving room for the floating controls.
+function fitCanvas() {
+  const stage = document.getElementById('stage');
+  const availW = stage.clientWidth - 200;   // clear of thumb strip + side margins
+  const availH = stage.clientHeight - 170;  // clear of top buttons + bottom bar
+  const s = Math.max(0.05, Math.min(availW / board.width, availH / board.height));
+  board.style.width = board.width * s + 'px';
+  board.style.height = board.height * s + 'px';
+}
+
+function updateOrientBtn() {
+  document.getElementById('orientBtn').textContent = ORIENT === 'landscape' ? '6×4' : '4×6';
+}
+
+// =====================================================================
+//  IMAGE INPUT
+// =====================================================================
+function addImageFromSrc(src, name) {
+  const img = new Image();
+  img.onload = () => {
+    // fit new image to ~60% of the short side
+    const target = OUT_H * 0.6;
+    const scale = target / img.naturalHeight;
+    const layer = {
+      id: uid++, name: name || `Image ${layers.length + 1}`,
+      src, img, visible: true,
+      x: OUT_W / 2, y: OUT_H / 2,
+      scale, rot: 0, opacity: 1,
+      dither: { enabled: true, algo: 'floyd', brightness: 0, contrast: 0, invert: false },
+      _baked: null, _bakeKey: null,
+    };
+    layers.push(layer);
+    selId = layer.id;
+    renderThumbs(); syncBar(); render();
+  };
+  img.onerror = () => toast('Could not load image', true);
+  img.src = src;
+}
+
+function handleFiles(files) {
+  [...files].filter(f => f.type.startsWith('image/')).forEach(f => {
+    const r = new FileReader();
+    r.onload = e => addImageFromSrc(e.target.result, f.name.replace(/\.[^.]+$/, ''));
+    r.readAsDataURL(f);
+  });
+}
+
+// =====================================================================
+//  DITHERING / BAKING
+// =====================================================================
+const BAYER4 = [
+  [0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5],
+].map(r => r.map(v => (v + 0.5) / 16 * 255));
+
+function adjust(data, layer) {
+  const b = layer.dither.brightness;
+  const c = layer.dither.contrast;
+  const cf = (259 * (c + 255)) / (255 * (259 - c)); // contrast factor
+  const inv = layer.dither.invert;
+  for (let i = 0; i < data.length; i += 4) {
+    for (let k = 0; k < 3; k++) {
+      let v = data[i + k];
+      v = cf * (v - 128) + 128 + b;
+      if (inv) v = 255 - v;
+      data[i + k] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+  }
+}
+
+// Convert ImageData in place to 1-bit black-on-transparent via chosen algorithm.
+function dither1bit(id, algo) {
+  const { data, width: w, height: h } = id;
+  const n = w * h;
+  const gray = new Float32Array(n);
+  const op = new Uint8Array(n); // opaque mask
+  for (let i = 0; i < n; i++) {
+    const a = data[i * 4 + 3];
+    op[i] = a > 40 ? 1 : 0;
+    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+
+  const on = new Uint8Array(n);
+  if (algo === 'threshold') {
+    for (let i = 0; i < n; i++) on[i] = gray[i] < 128 ? 1 : 0;
+  } else if (algo === 'bayer') {
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        on[i] = gray[i] < BAYER4[y & 3][x & 3] ? 1 : 0;
+      }
+  } else {
+    // error diffusion (floyd / atkinson)
+    const push = (x, y, err, f) => {
+      if (x < 0 || x >= w || y < 0 || y >= h) return;
+      gray[y * w + x] += err * f;
+    };
+    const atk = algo === 'atkinson';
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const old = gray[i];
+        const nv = old < 128 ? 0 : 255;
+        on[i] = nv === 0 ? 1 : 0;
+        const err = old - nv;
+        if (atk) {
+          const e = err / 8;
+          push(x + 1, y, e, 1); push(x + 2, y, e, 1);
+          push(x - 1, y + 1, e, 1); push(x, y + 1, e, 1); push(x + 1, y + 1, e, 1);
+          push(x, y + 2, e, 1);
+        } else {
+          push(x + 1, y, err, 7 / 16);
+          push(x - 1, y + 1, err, 3 / 16);
+          push(x, y + 1, err, 5 / 16);
+          push(x + 1, y + 1, err, 1 / 16);
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const ink = op[i] && on[i];
+    data[i * 4] = 0; data[i * 4 + 1] = 0; data[i * 4 + 2] = 0;
+    data[i * 4 + 3] = ink ? 255 : 0;
+  }
+}
+
+function bakeKey(layer, scale) {
+  const d = layer.dither;
+  return [scale.toFixed(4), layer.scale.toFixed(4), d.enabled, d.algo, d.brightness, d.contrast, d.invert, layer.src.length].join('|');
+}
+
+// Returns a canvas of the layer rendered at its footprint size for `scale`.
+function getBaked(layer, scale, useCache = true) {
+  const key = bakeKey(layer, scale);
+  if (useCache && layer._baked && layer._bakeKey === key) return layer._baked;
+
+  const img = layer.img;
+  let bw = Math.max(1, Math.round(img.naturalWidth * layer.scale * scale));
+  let bh = Math.max(1, Math.round(img.naturalHeight * layer.scale * scale));
+  // Cap bake resolution for perf / canvas safety only; geometry is handled at draw time so a
+  // capped bake no longer changes the printed size. High enough to keep full-res dither crisp.
+  const cap = 4096;
+  const m = Math.max(bw, bh);
+  if (m > cap) { const r = cap / m; bw = Math.round(bw * r); bh = Math.round(bh * r); }
+
+  const c = document.createElement('canvas');
+  c.width = bw; c.height = bh;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, 0, 0, bw, bh);
+  const id = g.getImageData(0, 0, bw, bh);
+  adjust(id.data, layer);
+  if (layer.dither.enabled) dither1bit(id, layer.dither.algo);
+  g.putImageData(id, 0, 0);
+
+  if (useCache) { layer._baked = c; layer._bakeKey = key; }
+  return c;
+}
+
+// =====================================================================
+//  RENDER
+// =====================================================================
+function composite(targetCtx, scale, useCache) {
+  targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+  targetCtx.clearRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+  targetCtx.fillStyle = '#fff';
+  targetCtx.fillRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+
+  for (const layer of layers) {
+    if (!layer.visible || !layer.img) continue;
+    const b = getBaked(layer, scale, useCache);
+    // Draw at the intended footprint, NOT the baked bitmap's own pixel size. The bake may be
+    // resolution-capped (for perf / canvas limits); decoupling keeps size identical between the
+    // low-res preview and the full-res print.
+    const fw = layer.img.naturalWidth * layer.scale * scale;
+    const fh = layer.img.naturalHeight * layer.scale * scale;
+    targetCtx.save();
+    targetCtx.globalAlpha = layer.opacity;
+    targetCtx.translate(layer.x * scale, layer.y * scale);
+    targetCtx.rotate(layer.rot * Math.PI / 180);
+    targetCtx.imageSmoothingEnabled = !layer.dither.enabled;
+    targetCtx.drawImage(b, -fw / 2, -fh / 2, fw, fh);
+    targetCtx.restore();
+  }
+}
+
+function render() {
+  composite(ctx, renderScale, true);
+  drawSelection();
+}
+
+// selection box + handles in preview canvas px
+function layerCorners(layer) {
+  const w = layer.img.naturalWidth * layer.scale * renderScale;
+  const h = layer.img.naturalHeight * layer.scale * renderScale;
+  const cx = layer.x * renderScale, cy = layer.y * renderScale;
+  const a = layer.rot * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+  const pts = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
+  return pts.map(([x, y]) => ({ x: cx + x * cos - y * sin, y: cy + x * sin + y * cos }));
+}
+
+function rotateHandle(layer) {
+  const c = layerCorners(layer);
+  const topMid = { x: (c[0].x + c[1].x) / 2, y: (c[0].y + c[1].y) / 2 };
+  const a = layer.rot * Math.PI / 180;
+  return { x: topMid.x + Math.sin(a) * 26, y: topMid.y - Math.cos(a) * 26, topMid };
+}
+
+function drawSelection() {
+  const layer = selected();
+  if (!layer || !layer.img) return;
+  const c = layerCorners(layer);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#200010';
+  ctx.beginPath();
+  ctx.moveTo(c[0].x, c[0].y);
+  for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+  ctx.closePath();
+  ctx.stroke();
+
+  const rh = rotateHandle(layer);
+  ctx.beginPath(); ctx.moveTo(rh.topMid.x, rh.topMid.y); ctx.lineTo(rh.x, rh.y); ctx.stroke();
+  // handles
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#200010';
+  c.forEach(p => { ctx.beginPath(); ctx.rect(p.x - 4, p.y - 4, 8, 8); ctx.fill(); ctx.stroke(); });
+  ctx.beginPath(); ctx.arc(rh.x, rh.y, 5, 0, 7); ctx.fill(); ctx.stroke();
+}
+
+// =====================================================================
+//  THUMBNAIL STRIP (left — the images you added; top layer first)
+// =====================================================================
+function renderThumbs() {
+  const box = document.getElementById('thumbs');
+  box.innerHTML = '';
+  [...layers].reverse().forEach(layer => {
+    const im = document.createElement('img');
+    im.className = 'thumb' + (layer.id === selId ? ' sel' : '');
+    im.src = layer.src;
+    im.title = layer.name;
+    if (!layer.visible) im.style.opacity = '.3';
+    im.addEventListener('click', () => { selId = layer.id; renderThumbs(); syncBar(); render(); });
+    box.appendChild(im);
+  });
+}
+
+function removeLayer(id) {
+  layers = layers.filter(l => l.id !== id);
+  if (selId === id) selId = layers.length ? layers[layers.length - 1].id : null;
+  renderThumbs(); syncBar(); render();
+}
+
+// =====================================================================
+//  BOTTOM BAR (controls for the selected image)
+// =====================================================================
+const DITHER_CYCLE = ['floyd', 'atkinson', 'bayer', 'threshold', 'off'];
+const DITHER_LABEL = { floyd: 'floyd', atkinson: 'atkinson', bayer: 'bayer', threshold: 'threshold', off: 'no dither' };
+function ditherState(layer) { return layer.dither.enabled ? layer.dither.algo : 'off'; }
+function cycleDither(layer) {
+  const cur = ditherState(layer);
+  const next = DITHER_CYCLE[(DITHER_CYCLE.indexOf(cur) + 1) % DITHER_CYCLE.length];
+  if (next === 'off') layer.dither.enabled = false;
+  else { layer.dither.enabled = true; layer.dither.algo = next; }
+}
+
+function syncBar() {
+  const layer = selected();
+  document.getElementById('imgbar').hidden = !layer;
+  if (!layer) return;
+  document.getElementById('ditherBtn').textContent = DITHER_LABEL[ditherState(layer)];
+  document.getElementById('invertBtn').classList.toggle('on', layer.dither.invert);
+  set('brightness', layer.dither.brightness);
+  set('contrast', layer.dither.contrast);
+  set('opacity', layer.opacity);
+}
+function set(id, v) { const el = document.getElementById(id); if (el && el.tagName !== 'SPAN') el.value = v; }
+
+function bindBar() {
+  const L = () => selected();
+  document.getElementById('ditherBtn').addEventListener('click', () => { if (L()) { cycleDither(L()); syncBar(); render(); } });
+  document.getElementById('invertBtn').addEventListener('click', () => { if (L()) { L().dither.invert = !L().dither.invert; syncBar(); render(); } });
+  document.getElementById('brightness').addEventListener('input', e => { if (L()) { L().dither.brightness = +e.target.value; render(); } });
+  document.getElementById('contrast').addEventListener('input', e => { if (L()) { L().dither.contrast = +e.target.value; render(); } });
+  document.getElementById('opacity').addEventListener('input', e => { if (L()) { L().opacity = +e.target.value; render(); } });
+
+  document.querySelectorAll('#imgbar [data-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const layer = L(); if (!layer) return;
+      const i = layers.indexOf(layer);
+      if (btn.dataset.act === 'front') { layers.splice(i, 1); layers.push(layer); }
+      if (btn.dataset.act === 'back') { layers.splice(i, 1); layers.unshift(layer); }
+      if (btn.dataset.act === 'del') { removeLayer(layer.id); return; }
+      renderThumbs(); render();
+    });
+  });
+}
+
+// =====================================================================
+//  CANVAS INTERACTION
+// =====================================================================
+let drag = null;
+
+function toCanvasPx(e) {
+  const r = board.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * board.width, y: (e.clientY - r.top) / r.height * board.height };
+}
+function toOut(p) { return { x: p.x / renderScale, y: p.y / renderScale }; }
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function hitLayer(outPt) {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
+    if (!l.visible || !l.img) continue;
+    const a = -l.rot * Math.PI / 180;
+    const dx = outPt.x - l.x, dy = outPt.y - l.y;
+    const lx = dx * Math.cos(a) - dy * Math.sin(a);
+    const ly = dx * Math.sin(a) + dy * Math.cos(a);
+    const w = l.img.naturalWidth * l.scale / 2, h = l.img.naturalHeight * l.scale / 2;
+    if (Math.abs(lx) <= w && Math.abs(ly) <= h) return l;
+  }
+  return null;
+}
+
+board.addEventListener('pointerdown', e => {
+  board.setPointerCapture(e.pointerId);
+  const cpx = toCanvasPx(e);
+  const layer = selected();
+
+  if (layer && layer.img) {
+    const corners = layerCorners(layer);
+    const rh = rotateHandle(layer);
+    if (dist(cpx, rh) < 12) {
+      const a0 = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
+      drag = { mode: 'rotate', a0, rot0: layer.rot }; return;
+    }
+    for (const c of corners) {
+      if (dist(cpx, c) < 12) {
+        const center = { x: layer.x * renderScale, y: layer.y * renderScale };
+        drag = { mode: 'scale', d0: dist(cpx, center) || 1, s0: layer.scale }; return;
+      }
+    }
+  }
+
+  const out = toOut(cpx);
+  const hit = hitLayer(out);
+  if (hit) {
+    selId = hit.id; renderThumbs(); syncBar(); render();
+    drag = { mode: 'move', start: out, x0: hit.x, y0: hit.y };
+  } else {
+    selId = null; renderThumbs(); syncBar(); render();
+  }
+});
+
+board.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const layer = selected(); if (!layer) return;
+  const cpx = toCanvasPx(e);
+  if (drag.mode === 'move') {
+    const out = toOut(cpx);
+    layer.x = drag.x0 + (out.x - drag.start.x);
+    layer.y = drag.y0 + (out.y - drag.start.y);
+  } else if (drag.mode === 'scale') {
+    const center = { x: layer.x * renderScale, y: layer.y * renderScale };
+    layer.scale = Math.max(0.02, Math.min(8, drag.s0 * (dist(cpx, center) / drag.d0)));
+    set('scale', layer.scale); set('scaleVal', Math.round(layer.scale * 100) + '%');
+  } else if (drag.mode === 'rotate') {
+    const a = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
+    layer.rot = drag.rot0 + (a - drag.a0) * 180 / Math.PI;
+    while (layer.rot > 180) layer.rot -= 360; while (layer.rot < -180) layer.rot += 360;
+    set('rotation', layer.rot); set('rotVal', Math.round(layer.rot) + '°');
+  }
+  render();
+});
+
+board.addEventListener('pointerup', () => { if (drag) drag = null; });
+
+// wheel = scale selected
+board.addEventListener('wheel', e => {
+  const layer = selected(); if (!layer) return;
+  e.preventDefault();
+  layer.scale = Math.max(0.02, Math.min(8, layer.scale * (1 - e.deltaY * 0.0012)));
+  render();
+}, { passive: false });
+
+// keyboard
+window.addEventListener('keydown', e => {
+  const layer = selected();
+  if (e.key === 'Escape') { selId = null; renderThumbs(); syncBar(); render(); return; }
+  if (!layer) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && e.target.tagName !== 'INPUT') { removeLayer(layer.id); e.preventDefault(); return; }
+  const step = e.shiftKey ? 10 : 2;
+  if (e.key === 'ArrowLeft') { layer.x -= step; render(); e.preventDefault(); }
+  if (e.key === 'ArrowRight') { layer.x += step; render(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { layer.y -= step; render(); e.preventDefault(); }
+  if (e.key === 'ArrowDown') { layer.y += step; render(); e.preventDefault(); }
+});
+
+// =====================================================================
+//  OUTPUT (full-res render for print / export)
+// =====================================================================
+function renderFullRes() {
+  const c = document.createElement('canvas');
+  c.width = OUT_W; c.height = OUT_H;
+  composite(c.getContext('2d'), 1, false); // bake at full res, no cache
+  return c;
+}
+
+function exportPNG() {
+  const url = renderFullRes().toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url; a.download = `postcard_${Date.now()}.png`; a.click();
+}
+
+// Build the exact image sent to the printer: always the label's native PORTRAIT
+// grid (short side = width, long side = height). A landscape design is rotated 90°
+// so a 6x4 postcard fills a 4x6 label with no scaling.
+function buildPrintCanvas() {
+  const full = renderFullRes();                 // OUT_W x OUT_H in current orientation
+  const shortPx = Math.round(INCH_SHORT * DPI); // 4"
+  const longPx = Math.round(INCH_LONG * DPI);   // 6"
+  const c = document.createElement('canvas');
+  c.width = shortPx; c.height = longPx;         // portrait label
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  if (ORIENT === 'portrait') {
+    g.drawImage(full, 0, 0, c.width, c.height);
+  } else {
+    g.translate(c.width, 0); g.rotate(Math.PI / 2);
+    g.drawImage(full, 0, 0, longPx, shortPx);   // landscape (longxshort) into rotated frame
+  }
+  return c;
+}
+
+async function print() {
+  const printer = document.getElementById('printerSelect').value;
+  if (!printer) { toast('No printer selected — click ⟳ or + WiFi', true); return; }
+  if (!layers.length) { toast('Add an image first', true); return; }
+  toast('Rendering & sending to ' + printer + ' …');
+  const dataURL = buildPrintCanvas().toDataURL('image/png');
+  const lpOptions = lpOptionString().trim().split(/\s+/);
+  try {
+    const res = await fetch('/api/print', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataURL, printer, lpOptions }),
+    });
+    const j = await res.json();
+    if (j.ok) toast('Sent to printer ✓ ' + (j.job || ''));
+    else toast('Print failed: ' + (j.error || 'unknown'), true);
+  } catch (err) { toast('Print error: ' + err.message, true); }
+}
+
+// =====================================================================
+//  PRINTERS
+// =====================================================================
+async function loadPrinters(selectPref) {
+  const sel = document.getElementById('printerSelect');
+  try {
+    const r = await fetch('/api/printers');
+    const j = await r.json();
+    sel.innerHTML = '';
+    const mk = (name, label) => { const o = document.createElement('option'); o.value = name; o.textContent = label; sel.appendChild(o); };
+    const printers = j.printers || [];
+    // prioritise the real Phomemo queue; a leading "_" marks a generic temp queue, so rank it lower
+    const score = p => (/pm643|phomemo/i.test(p.name) ? 2 : 0) + (p.name.startsWith('_') ? 0 : 1);
+    printers.sort((a, b) => score(b) - score(a));
+    printers.forEach(p => mk(p.name, `${p.name}${p.kind === 'network' ? ' · wifi' : p.kind === 'usb' ? ' · usb' : ''}${p.state === 'disabled' ? ' (off)' : ''}`));
+    if (!printers.length) mk('', 'No printers found');
+    const pref = selectPref
+      || printers.find(p => /pm643_usb/i.test(p.name))?.name          // the stable permanent queue that works
+      || printers.find(p => /pm643|phomemo/i.test(p.name) && !p.name.startsWith('_'))?.name
+      || printers.find(p => /pm643|phomemo/i.test(p.name))?.name
+      || j.defaultName;
+    if (pref) sel.value = pref;
+  } catch (e) { toast('Could not list printers: ' + e.message, true); }
+}
+
+// =====================================================================
+//  WiFi add modal
+// =====================================================================
+function openWifi() { document.getElementById('wifiModal').hidden = false; document.getElementById('wifiMsg').textContent = ''; document.getElementById('wifiIp').focus(); }
+function closeWifi() { document.getElementById('wifiModal').hidden = true; }
+async function addWifi() {
+  const ip = document.getElementById('wifiIp').value.trim();
+  const name = document.getElementById('wifiName').value.trim();
+  const msg = document.getElementById('wifiMsg');
+  if (!ip) { msg.textContent = 'Enter an IP address.'; return; }
+  msg.textContent = 'Adding…';
+  try {
+    const r = await fetch('/api/add-wifi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, name }) });
+    const j = await r.json();
+    if (j.ok) { msg.textContent = 'Added as ' + j.name; await loadPrinters(j.name); setTimeout(closeWifi, 700); }
+    else msg.textContent = 'Failed: ' + (j.error || 'unknown');
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+}
+
+// =====================================================================
+//  SETTINGS POPOVER (printer + lp options)
+// =====================================================================
+function bindSettings() {
+  const panel = document.getElementById('settings');
+  document.getElementById('settingsBtn').addEventListener('click', () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) document.getElementById('lpOptsInput').value = lpOptionString();
+  });
+  const input = document.getElementById('lpOptsInput');
+  input.addEventListener('input', () => {
+    if (input.value.trim()) setLpOptionString(input.value);
+    else localStorage.removeItem('lpopts_' + ORIENT);
+  });
+}
+
+// =====================================================================
+//  TOAST
+// =====================================================================
+let toastT;
+function toast(msg, err) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, err ? 6000 : 3000);
+}
+
+// =====================================================================
+//  WIRE UP
+// =====================================================================
+function init() {
+  document.getElementById('addImageBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+  document.getElementById('fileInput').addEventListener('change', e => { handleFiles(e.target.files); e.target.value = ''; });
+
+  document.getElementById('orientBtn').addEventListener('click', () => {
+    ORIENT = ORIENT === 'landscape' ? 'portrait' : 'landscape';
+    applyFormat(); updateOrientBtn();
+  });
+
+  document.getElementById('printBtn').addEventListener('click', print);
+  document.getElementById('exportBtn').addEventListener('click', exportPNG);
+  document.getElementById('refreshPrinters').addEventListener('click', () => { toast('discovering printers…'); loadPrinters(); });
+  document.getElementById('addWifiBtn').addEventListener('click', openWifi);
+  document.getElementById('wifiCancel').addEventListener('click', closeWifi);
+  document.getElementById('wifiAdd').addEventListener('click', addWifi);
+
+  // drag & drop
+  const stage = document.getElementById('stage');
+  ['dragenter', 'dragover'].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); stage.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev => stage.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop') handleFiles(e.dataTransfer.files); stage.classList.remove('dragover'); }));
+
+  // paste
+  window.addEventListener('paste', e => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) if (it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) handleFiles([f]); }
+  });
+
+  window.addEventListener('resize', () => { fitCanvas(); render(); });
+
+  bindBar();
+  bindSettings();
+  updateOrientBtn();
+  applyFormat();
+  loadPrinters();
+  syncBar();
+  renderThumbs();
+}
+
+init();
