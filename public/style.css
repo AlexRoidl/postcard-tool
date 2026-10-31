@@ -63,6 +63,19 @@ body {
 }
 #top .cluster { display: flex; gap: 8px; pointer-events: auto; }
 
+/* optional name / title field (shown to participants in queue mode) */
+#nameInput {
+  pointer-events: auto;
+  background: #fff; color: var(--ink);
+  border: 2px solid var(--ink); border-radius: 0;
+  font: 700 15px var(--font); letter-spacing: .3px;
+  height: 46px; padding: 0 14px; width: min(320px, 42vw); min-width: 0;
+  text-align: center;
+}
+#nameInput::placeholder { color: var(--muted); font-weight: 400; }
+#nameInput:focus { outline: none; background: var(--mint); }
+#nameInput[hidden] { display: none; }
+
 /* ---- center stage + canvas ---- */
 #stage {
   position: absolute; inset: 0;

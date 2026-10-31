@@ -517,13 +517,16 @@ async function fetchConfig() {
 
 function applyMode() {
   const btn = document.getElementById('printBtn');
+  const ni = document.getElementById('nameInput');
   if (CONFIG.role === 'queue') {
     btn.textContent = 'send to print';
-    // participants don't pick printers — hide the gear
+    // participants don't pick printers — hide the gear, show the name field
     const gear = document.getElementById('settingsBtn');
     if (gear) gear.style.display = 'none';
+    if (ni) ni.hidden = false;
   } else {
     btn.textContent = 'print';
+    if (ni) ni.hidden = true;
     loadPrinters();
   }
 }
@@ -538,12 +541,7 @@ async function submitJob() {
     room = localStorage.getItem('room_code') || '';
     if (!room) { room = (prompt('Workshop code (from the facilitator):') || '').trim(); if (!room) return; localStorage.setItem('room_code', room); }
   }
-  let name = localStorage.getItem('participant_name') || '';
-  if (!name) {
-    name = (prompt('Your name:') || '').trim();
-    if (!name) { toast('Please enter a name to print', true); return; }
-    localStorage.setItem('participant_name', name);
-  }
+  const name = (document.getElementById('nameInput')?.value || '').trim(); // optional
   toast('Sending to the print queue …');
   const dataURL = buildPrintCanvas().toDataURL('image/png');
   const lpOptions = lpOptionString().trim().split(/\s+/);
@@ -645,6 +643,13 @@ function init() {
 
   document.getElementById('printBtn').addEventListener('click', onPrintClick);
   document.getElementById('exportBtn').addEventListener('click', exportPNG);
+
+  // optional name/title field — remembered, but always visible & editable
+  const ni = document.getElementById('nameInput');
+  if (ni) {
+    ni.value = localStorage.getItem('participant_name') || '';
+    ni.addEventListener('input', () => localStorage.setItem('participant_name', ni.value.trim()));
+  }
   document.getElementById('refreshPrinters').addEventListener('click', () => { toast('discovering printers…'); loadPrinters(); });
   document.getElementById('addWifiBtn').addEventListener('click', openWifi);
   document.getElementById('wifiCancel').addEventListener('click', closeWifi);
