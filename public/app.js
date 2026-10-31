@@ -16,7 +16,8 @@ const board = document.getElementById('board');
 const ctx = board.getContext('2d');
 
 // ---------- state ----------
-let layers = [];                     // bottom -> top
+let assets = [];                     // uploaded image library (left strip)
+let layers = [];                     // canvas placements, bottom -> top
 let selId = null;
 let uid = 1;
 
@@ -71,32 +72,39 @@ function updateOrientBtn() {
 // =====================================================================
 //  IMAGE INPUT
 // =====================================================================
-function addImageFromSrc(src, name) {
+// Uploading adds the image to the left library (it stays there);
+// clicking a library item places it on the canvas (as many times as you like).
+function addAssetFromSrc(src, name) {
   const img = new Image();
   img.onload = () => {
-    // fit new image to ~60% of the short side
-    const target = OUT_H * 0.6;
-    const scale = target / img.naturalHeight;
-    const layer = {
-      id: uid++, name: name || `Image ${layers.length + 1}`,
-      src, img, visible: true,
-      x: OUT_W / 2, y: OUT_H / 2,
-      scale, rot: 0, opacity: 1,
-      dither: { enabled: true, algo: 'floyd', brightness: 0, contrast: 0, invert: false },
-      _baked: null, _bakeKey: null,
-    };
-    layers.push(layer);
-    selId = layer.id;
-    renderThumbs(); syncBar(); render();
+    assets.push({ id: uid++, src, img, name: name || `Image ${assets.length + 1}` });
+    renderThumbs();
   };
   img.onerror = () => toast('Could not load image', true);
   img.src = src;
 }
 
+function addLayerFromAsset(asset) {
+  if (!asset.img || !asset.img.naturalHeight) return;
+  // fit new placement to ~60% of the short side
+  const scale = (OUT_H * 0.6) / asset.img.naturalHeight;
+  const layer = {
+    id: uid++, assetId: asset.id, name: asset.name,
+    src: asset.src, img: asset.img, visible: true,
+    x: OUT_W / 2, y: OUT_H / 2,
+    scale, rot: 0, opacity: 1,
+    dither: { enabled: true, algo: 'floyd', brightness: 0, contrast: 0, invert: false },
+    _baked: null, _bakeKey: null,
+  };
+  layers.push(layer);
+  selId = layer.id;
+  renderThumbs(); syncBar(); render();
+}
+
 function handleFiles(files) {
   [...files].filter(f => f.type.startsWith('image/')).forEach(f => {
     const r = new FileReader();
-    r.onload = e => addImageFromSrc(e.target.result, f.name.replace(/\.[^.]+$/, ''));
+    r.onload = e => addAssetFromSrc(e.target.result, f.name.replace(/\.[^.]+$/, ''));
     r.readAsDataURL(f);
   });
 }
@@ -286,23 +294,40 @@ function drawSelection() {
 // =====================================================================
 //  THUMBNAIL STRIP (left — the images you added; top layer first)
 // =====================================================================
+// The left strip is the image LIBRARY (uploaded images), not the canvas layers.
+// Click a thumb to place it on the canvas; the ✕ removes it from the session.
 function renderThumbs() {
   const box = document.getElementById('thumbs');
   box.innerHTML = '';
-  [...layers].reverse().forEach(layer => {
+  const selAsset = selected()?.assetId;
+  assets.forEach(asset => {
+    const d = document.createElement('div');
+    d.className = 'thumb' + (asset.id === selAsset ? ' sel' : '');
+    d.title = 'Click to add to the canvas';
     const im = document.createElement('img');
-    im.className = 'thumb' + (layer.id === selId ? ' sel' : '');
-    im.src = layer.src;
-    im.title = layer.name;
-    if (!layer.visible) im.style.opacity = '.3';
-    im.addEventListener('click', () => { selId = layer.id; renderThumbs(); syncBar(); render(); });
-    box.appendChild(im);
+    im.src = asset.src;
+    d.appendChild(im);
+    const del = document.createElement('button');
+    del.className = 'del'; del.textContent = '✕'; del.title = 'Remove from session';
+    del.addEventListener('click', e => { e.stopPropagation(); removeAsset(asset.id); });
+    d.appendChild(del);
+    d.addEventListener('click', () => addLayerFromAsset(asset));
+    box.appendChild(d);
   });
 }
 
+// Delete a single canvas placement — the image stays in the library.
 function removeLayer(id) {
   layers = layers.filter(l => l.id !== id);
   if (selId === id) selId = layers.length ? layers[layers.length - 1].id : null;
+  renderThumbs(); syncBar(); render();
+}
+
+// Delete an uploaded image from the session entirely (library + any placements).
+function removeAsset(id) {
+  assets = assets.filter(a => a.id !== id);
+  layers = layers.filter(l => l.assetId !== id);
+  if (!layers.find(l => l.id === selId)) selId = layers.length ? layers[layers.length - 1].id : null;
   renderThumbs(); syncBar(); render();
 }
 
