@@ -14,6 +14,8 @@ let renderScale = 1;                 // output px -> preview canvas px
 
 const board = document.getElementById('board');
 const ctx = board.getContext('2d');
+const COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);  // touch device
+const pointers = new Map();           // active pointers on the board (for pinch)
 
 // ---------- state ----------
 let assets = [];                     // uploaded image library (left strip)
@@ -58,8 +60,9 @@ function applyFormat() {
 // Fit the canvas into the stage, leaving room for the floating controls.
 function fitCanvas() {
   const stage = document.getElementById('stage');
-  const availW = stage.clientWidth - 200;   // clear of thumb strip + side margins
-  const availH = stage.clientHeight - 170;  // clear of top buttons + bottom bar
+  const mobile = window.innerWidth < 560;
+  const availW = stage.clientWidth - (mobile ? 78 : 200);   // clear of thumb strip + margins
+  const availH = stage.clientHeight - (mobile ? 206 : 170); // clear of top + bottom bars
   const s = Math.max(0.05, Math.min(availW / board.width, availH / board.height));
   board.style.width = board.width * s + 'px';
   board.style.height = board.height * s + 'px';
@@ -77,8 +80,10 @@ function updateOrientBtn() {
 function addAssetFromSrc(src, name) {
   const img = new Image();
   img.onload = () => {
-    assets.push({ id: uid++, src, img, name: name || `Image ${assets.length + 1}` });
+    const asset = { id: uid++, src, img, name: name || `Image ${assets.length + 1}` };
+    assets.push(asset);
     renderThumbs();
+    addLayerFromAsset(asset);   // also place it on the canvas immediately
   };
   img.onerror = () => toast('Could not load image', true);
   img.src = src;
@@ -276,7 +281,10 @@ function drawSelection() {
   if (!layer || !layer.img) return;
   const c = layerCorners(layer);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.lineWidth = 1.5;
+  const px2 = board.width / (board.getBoundingClientRect().width || board.width);
+  const hs = (COARSE ? 10 : 4) * px2;   // square-handle half size (≈ constant CSS px)
+  const rr = (COARSE ? 10 : 5) * px2;   // rotate-knob radius
+  ctx.lineWidth = (COARSE ? 2 : 1.5) * px2;
   ctx.strokeStyle = '#200010';
   ctx.beginPath();
   ctx.moveTo(c[0].x, c[0].y);
@@ -288,8 +296,8 @@ function drawSelection() {
   ctx.beginPath(); ctx.moveTo(rh.topMid.x, rh.topMid.y); ctx.lineTo(rh.x, rh.y); ctx.stroke();
   // handles
   ctx.fillStyle = '#fff'; ctx.strokeStyle = '#200010';
-  c.forEach(p => { ctx.beginPath(); ctx.rect(p.x - 4, p.y - 4, 8, 8); ctx.fill(); ctx.stroke(); });
-  ctx.beginPath(); ctx.arc(rh.x, rh.y, 5, 0, 7); ctx.fill(); ctx.stroke();
+  c.forEach(p => { ctx.beginPath(); ctx.rect(p.x - hs, p.y - hs, hs * 2, hs * 2); ctx.fill(); ctx.stroke(); });
+  ctx.beginPath(); ctx.arc(rh.x, rh.y, rr, 0, 7); ctx.fill(); ctx.stroke();
 }
 
 // =====================================================================
@@ -406,17 +414,28 @@ function hitLayer(outPt) {
 board.addEventListener('pointerdown', e => {
   board.setPointerCapture(e.pointerId);
   const cpx = toCanvasPx(e);
-  const layer = selected();
+  pointers.set(e.pointerId, cpx);
 
+  // two fingers on the selected image → pinch to scale & rotate
+  if (pointers.size === 2 && selected()) {
+    const [p1, p2] = [...pointers.values()];
+    const l = selected();
+    drag = { mode: 'pinch', d0: dist(p1, p2) || 1, a0: Math.atan2(p2.y - p1.y, p2.x - p1.x), s0: l.scale, rot0: l.rot };
+    return;
+  }
+
+  const layer = selected();
+  const px2 = board.width / (board.getBoundingClientRect().width || board.width);
+  const tol = (e.pointerType === 'touch' ? 26 : 11) * px2;   // finger-sized grab radius
   if (layer && layer.img) {
     const corners = layerCorners(layer);
     const rh = rotateHandle(layer);
-    if (dist(cpx, rh) < 12) {
+    if (dist(cpx, rh) < tol) {
       const a0 = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
       drag = { mode: 'rotate', a0, rot0: layer.rot }; return;
     }
     for (const c of corners) {
-      if (dist(cpx, c) < 12) {
+      if (dist(cpx, c) < tol) {
         const center = { x: layer.x * renderScale, y: layer.y * renderScale };
         drag = { mode: 'scale', d0: dist(cpx, center) || 1, s0: layer.scale }; return;
       }
@@ -434,8 +453,21 @@ board.addEventListener('pointerdown', e => {
 });
 
 board.addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, toCanvasPx(e));
   if (!drag) return;
   const layer = selected(); if (!layer) return;
+
+  if (drag.mode === 'pinch') {
+    const pts = [...pointers.values()];
+    if (pts.length < 2) return;
+    const [p1, p2] = pts;
+    const d = dist(p1, p2), a = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    layer.scale = Math.max(0.02, Math.min(8, drag.s0 * (d / drag.d0)));
+    layer.rot = drag.rot0 + (a - drag.a0) * 180 / Math.PI;
+    while (layer.rot > 180) layer.rot -= 360; while (layer.rot < -180) layer.rot += 360;
+    render(); return;
+  }
+
   const cpx = toCanvasPx(e);
   if (drag.mode === 'move') {
     const out = toOut(cpx);
@@ -444,17 +476,20 @@ board.addEventListener('pointermove', e => {
   } else if (drag.mode === 'scale') {
     const center = { x: layer.x * renderScale, y: layer.y * renderScale };
     layer.scale = Math.max(0.02, Math.min(8, drag.s0 * (dist(cpx, center) / drag.d0)));
-    set('scale', layer.scale); set('scaleVal', Math.round(layer.scale * 100) + '%');
   } else if (drag.mode === 'rotate') {
     const a = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
     layer.rot = drag.rot0 + (a - drag.a0) * 180 / Math.PI;
     while (layer.rot > 180) layer.rot -= 360; while (layer.rot < -180) layer.rot += 360;
-    set('rotation', layer.rot); set('rotVal', Math.round(layer.rot) + '°');
   }
   render();
 });
 
-board.addEventListener('pointerup', () => { if (drag) drag = null; });
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (drag && (drag.mode !== 'pinch' || pointers.size < 2)) drag = null;
+}
+board.addEventListener('pointerup', endPointer);
+board.addEventListener('pointercancel', endPointer);
 
 // wheel = scale selected
 board.addEventListener('wheel', e => {

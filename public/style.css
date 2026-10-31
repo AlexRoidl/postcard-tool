@@ -134,11 +134,21 @@ body {
 /* ---- range inputs ---- */
 input[type=range] {
   -webkit-appearance: none; appearance: none;
-  width: 92px; height: 3px; background: var(--muted); cursor: pointer;
+  width: 92px; height: 18px; background: transparent; cursor: pointer; margin: 0;
 }
+input[type=range]::-webkit-slider-runnable-track { height: 3px; background: var(--muted); }
+input[type=range]::-moz-range-track { height: 3px; background: var(--muted); }
 input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 14px; height: 14px; border-radius: 0;
-  background: var(--mint); border: none;
+  background: var(--mint); border: none; margin-top: -5.5px;
+}
+input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 0; background: var(--mint); border: none; }
+
+/* bigger touch targets on touch devices */
+@media (pointer: coarse) {
+  input[type=range] { height: 28px; }
+  input[type=range]::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -9.5px; }
+  input[type=range]::-moz-range-thumb { width: 22px; height: 22px; }
 }
 
 /* ---- settings popover ---- */
@@ -177,3 +187,29 @@ select:focus, input:focus { outline: none; background: #3a0f24; }
 }
 #toast[hidden] { display: none; }
 #toast.err { color: var(--err); }
+
+/* =====================================================================
+   MOBILE / narrow screens
+   ===================================================================== */
+@media (max-width: 560px) {
+  /* top bar: two rows — buttons, then a full-width name field */
+  #top { flex-wrap: wrap; gap: 8px; top: 10px; left: 10px; right: 10px; }
+  #top .cluster { gap: 6px; }
+  #nameInput { order: 3; width: 100%; height: 42px; }
+  .btn { font-size: 15px; padding: 9px 11px; letter-spacing: 0; }
+  .btn.sq { width: 42px; height: 42px; font-size: 20px; }
+
+  /* make room on the left for the thumbnail strip so the canvas never sits under it */
+  #stage { padding: 0 8px 0 70px; }
+  #thumbs { left: 8px; top: 112px; bottom: 120px; width: 56px; gap: 6px; }
+  .thumb { width: 56px; height: 42px; }
+  .thumb .del { width: 22px; height: 22px; font-size: 13px; display: block; } /* no hover on touch */
+
+  /* bottom controls: compact, wrap to at most a couple of rows */
+  #imgbar { bottom: 10px; gap: 5px; max-width: calc(100vw - 20px); }
+  .ctrl { height: 42px; padding: 0 10px; }
+  input[type=range] { width: 70px; }
+
+  /* popovers span the width */
+  #settings { left: 10px; right: 10px; width: auto; }
+}
