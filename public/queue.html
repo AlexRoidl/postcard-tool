@@ -8,29 +8,44 @@
 <style>
   body { overflow: auto; padding: 18px 16px 48px; }
 
-  /* tiny, unobtrusive live status — no headline */
-  #bar { font-size: 11px; color: var(--muted); font-weight: 400; margin: 0 0 16px;
+  /* tiny live status — no headline */
+  #bar { font-size: 11px; color: var(--muted); font-weight: 400; margin: 0 0 18px;
          display: flex; align-items: center; gap: 8px; }
   #bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); display: inline-block; }
-  #bar a { color: var(--muted); }
   #bar .err { color: var(--err); }
 
-  /* gallery: borderless masonry */
-  #gallery { column-width: 230px; column-gap: 16px; }
-  .item { break-inside: avoid; margin: 0 0 18px; }
-  .pic { position: relative; line-height: 0; }
-  .pic img { width: 100%; display: block; }         /* no border */
-  .item.done .pic img { opacity: .5; }               /* printed ones recede */
+  /* settings gear (token) top-right */
+  #gear { position: fixed; top: 14px; right: 16px; z-index: 60; }
+  #settings { position: fixed; top: 66px; right: 16px; z-index: 60;
+              background: var(--ink); color: #fff; padding: 14px; width: min(320px, 90vw);
+              display: none; flex-direction: column; gap: 9px; }
+  #settings.on { display: flex; }
+  #settings label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; opacity: .7; }
+  #settings input { appearance: none; background: var(--ink); color: #fff; border: 2px solid #fff;
+                    border-radius: 0; font: 700 13px var(--font); padding: 8px 10px; }
+  #settings .hint { font-size: 11px; font-weight: 400; opacity: .6; }
+
+  /* gallery: borderless masonry with a soft drop shadow */
+  #gallery { column-width: 230px; column-gap: 18px; }
+  .item { break-inside: avoid; margin: 0 0 22px; }
+  .pic { position: relative; line-height: 0; cursor: zoom-in;
+         box-shadow: 0 5px 18px rgba(32,0,16,.16); }
+  .pic img { width: 100%; display: block; }
+
+  /* landscape postcards are stored rotated for the printer — rotate back for display */
+  .item.landscape .pic { aspect-ratio: 3 / 2; overflow: hidden; }
+  .item.landscape .pic img { position: absolute; top: 50%; left: 50%;
+       width: 66.6667%; height: auto;
+       transform: translate(-50%, -50%) rotate(-90deg); transform-origin: center; }
 
   .badge { position: absolute; top: 7px; right: 7px; font-size: 11px; font-weight: 700;
-           padding: 1px 7px; line-height: 1.5; }
-  .badge.ok { background: var(--mint); color: var(--ink); }
-  .badge.go { background: var(--ink); color: #fff; }
+           padding: 1px 7px; line-height: 1.5; z-index: 2; }
+  .badge.go  { background: var(--ink); color: #fff; }
   .badge.bad { background: var(--err); color: #fff; }
 
   /* hover overlay: status + actions */
   .ov { position: absolute; inset: 0; display: flex; align-items: flex-end;
-        opacity: 0; transition: opacity .12s; }
+        opacity: 0; transition: opacity .12s; z-index: 3; }
   .pic:hover .ov { opacity: 1; }
   .ov .inner { width: 100%; background: rgba(32,0,16,.84); color: #fff;
                display: flex; align-items: center; justify-content: space-between;
@@ -43,13 +58,30 @@
   .ov button.rej { background: transparent; color: #fff; padding: 6px 4px; }
   .ov button.rej:hover { color: var(--err); background: transparent; }
 
-  .nm { font-size: 11px; color: var(--muted); text-align: center; padding: 5px 2px 0; font-weight: 700; }
+  .nm { font-size: 11px; color: var(--muted); text-align: center; padding: 6px 2px 0; font-weight: 700; }
   #empty { color: var(--muted); font-weight: 400; font-size: 13px; }
+
+  /* lightbox */
+  #light { position: fixed; inset: 0; background: rgba(32,0,16,.82); z-index: 100;
+           display: none; align-items: center; justify-content: center; cursor: zoom-out; }
+  #light.on { display: flex; }
+  #light img { max-width: 90vw; max-height: 90vh; background: #fff;
+               box-shadow: 0 24px 70px rgba(0,0,0,.45); }
+  #light img.landscape { max-width: 90vh; max-height: 90vw; transform: rotate(-90deg); }
 </style>
 </head>
 <body>
-  <div id="bar"><span class="dot"></span><span id="status">connecting…</span> · <a href="#" id="reauth">token</a></div>
+  <div id="bar"><span class="dot"></span><span id="status">connecting…</span></div>
+
+  <button id="gear" class="btn sq" title="Settings">⚙</button>
+  <div id="settings">
+    <label>admin token</label>
+    <input id="tok" type="text" placeholder="(blank = no auth)" autocomplete="off">
+    <span class="hint">only needed if the server has ADMIN_TOKEN set</span>
+  </div>
+
   <div id="gallery"><span id="empty">no postcards yet</span></div>
+  <div id="light"><img alt=""></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -57,13 +89,25 @@ let token = localStorage.getItem('admin_token') || '';
 const hdr = () => token ? { 'x-print-token': token } : {};
 let lastKey = '';
 
-$('#reauth').onclick = e => {
-  e.preventDefault();
-  const t = (prompt('Admin token (leave blank if none):') || '').trim();
-  token = t;
-  if (t) localStorage.setItem('admin_token', t); else localStorage.removeItem('admin_token');
+// settings / token
+$('#gear').onclick = () => { $('#tok').value = token; $('#settings').classList.toggle('on'); $('#tok').focus(); };
+$('#tok').addEventListener('change', e => {
+  token = e.target.value.trim();
+  if (token) localStorage.setItem('admin_token', token); else localStorage.removeItem('admin_token');
   lastKey = ''; poll();
-};
+});
+document.addEventListener('click', e => {
+  if (!$('#settings').contains(e.target) && e.target !== $('#gear')) $('#settings').classList.remove('on');
+});
+
+// lightbox
+const light = $('#light'), lightImg = light.querySelector('img');
+function openLight(id, orient) {
+  lightImg.src = `/api/jobs/${id}/png?token=${encodeURIComponent(token)}`;
+  lightImg.className = orient === 'landscape' ? 'landscape' : '';
+  light.classList.add('on');
+}
+light.onclick = () => { light.classList.remove('on'); lightImg.src = ''; };
 
 const ago = ts => { const s = Math.round((Date.now()-ts)/1000); if (s<60) return s+'s'; if (s<3600) return Math.round(s/60)+'m'; return Math.round(s/3600)+'h'; };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -72,17 +116,17 @@ async function act(id, action) { await fetch(`/api/jobs/${id}/${action}`, { meth
 
 function item(j) {
   const el = document.createElement('div');
-  el.className = 'item ' + j.status;
+  el.className = 'item ' + j.status + ' ' + (j.orient === 'landscape' ? 'landscape' : 'portrait');
   const src = `/api/jobs/${j.id}/png?token=${encodeURIComponent(token)}`;
 
+  // persistent badge only for in-progress / failed (printed state lives in the hover menu)
   let badge = '';
-  if (j.status === 'done') badge = '<span class="badge ok">printed ✓</span>';
-  else if (j.status === 'approved') badge = '<span class="badge go">printing…</span>';
+  if (j.status === 'approved') badge = '<span class="badge go">printing…</span>';
   else if (j.status === 'error') badge = '<span class="badge bad">failed</span>';
 
   let st = '', acts = '';
   if (j.status === 'pending')  { st = 'new · ' + ago(j.createdAt) + ' ago'; acts = `<button data-a="approve">print</button><button class="rej" data-a="reject">✕</button>`; }
-  else if (j.status === 'approved') { st = 'sent to printer…'; acts = ''; }
+  else if (j.status === 'approved') { st = 'sent to printer…'; }
   else if (j.status === 'done') { st = 'printed ' + ago(j.updatedAt || j.createdAt) + ' ago'; acts = `<button data-a="approve">reprint</button><button class="rej" data-a="reject">✕</button>`; }
   else if (j.status === 'error') { st = esc(j.error || 'print failed'); acts = `<button data-a="approve">retry</button><button class="rej" data-a="reject">✕</button>`; }
 
@@ -91,7 +135,9 @@ function item(j) {
       `<div class="ov"><div class="inner"><span class="st">${st}</span><span class="acts">${acts}</span></div></div>` +
     `</div>` +
     `<div class="nm">${j.name ? esc(j.name) : '—'}</div>`;
-  el.querySelectorAll('.ov button').forEach(b => b.onclick = () => act(j.id, b.dataset.a));
+
+  el.querySelector('.pic').onclick = () => openLight(j.id, j.orient);
+  el.querySelectorAll('.ov button').forEach(b => b.onclick = e => { e.stopPropagation(); act(j.id, b.dataset.a); });
   return el;
 }
 
@@ -99,17 +145,15 @@ async function poll() {
   try {
     const r = await fetch('/api/jobs', { headers: hdr() });
     if (r.status === 401) {
-      token = (prompt('Admin token:') || '').trim();
-      if (token) { localStorage.setItem('admin_token', token); lastKey=''; return poll(); }
-      $('#status').innerHTML = '<span class="err">token required</span>'; return;
+      $('#status').innerHTML = '<span class="err">token required — open ⚙</span>';
+      $('#settings').classList.add('on'); return;
     }
     const { jobs = [] } = await r.json();
-    // gallery: everything except rejected, newest first
     const show = jobs.filter(j => j.status !== 'rejected').sort((a,b) => b.createdAt - a.createdAt);
     $('#status').textContent = `${show.length} postcard${show.length===1?'':'s'} · updated ${new Date().toLocaleTimeString()}`;
 
     const key = show.map(j => j.id + ':' + j.status).join(',');
-    if (key === lastKey) return;   // avoid rebuilding (keeps hover smooth)
+    if (key === lastKey) return;   // avoid rebuilding (keeps hover + lightbox smooth)
     lastKey = key;
 
     const g = $('#gallery');
