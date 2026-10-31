@@ -65,7 +65,37 @@ Any `lp` error is shown in-app so you can adjust. List a queue's supported media
 lpoptions -p <queue> -l | grep -i media
 ```
 
+## Workshop mode (shared print queue)
+
+For a workshop where people design on their own devices and one Phomemo (on your
+Mac) does the printing — especially on networks with client isolation like
+**eduroam** — use the pull queue. Everything is **outbound HTTPS**, so nothing has
+to reach your Mac directly.
+
+- The **public server** (dokploy, `ROLE=queue`) collects designs. Participants open
+  the site, design, and hit **send to print**; the job lands in a queue. Submitting
+  is gated by `ROOM_CODE`; listing/fetching/managing jobs needs `ADMIN_TOKEN`.
+- You review and approve at **`/queue`** (enter the admin token once). Only approved
+  jobs get printed.
+- Your **Mac runs the pull agent**, which fetches approved jobs and prints them
+  locally via `lp`:
+
+  ```bash
+  QUEUE_URL=https://tool.poetic.software \
+  ADMIN_TOKEN=<admin-token> \
+  PRINTER=PM643_usb \
+  node server.js --agent
+  ```
+
+  Add `--auto` (or `AUTO=1`) to print every submission immediately, skipping the
+  approve step. `POLL_MS` sets the poll interval (default 4000).
+
+Queue-server env: `ROLE=queue`, `ROOM_CODE`, `ADMIN_TOKEN`, and `JOBS_DIR` pointed at
+a mounted volume so the queue survives redeploys.
+
 ## Files
 
-- `server.js` — static server + `/api/printers`, `/api/add-wifi`, `/api/print`.
+- `server.js` — static server + `/api/printers`, `/api/add-wifi`, `/api/print`,
+  the print-queue API (`/api/config`, `/api/jobs…`), and the `--agent` pull printer.
 - `public/index.html`, `public/style.css`, `public/app.js` — the editor.
+- `public/queue.html` — the facilitator queue (approve / reject prints).
