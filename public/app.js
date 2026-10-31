@@ -251,6 +251,7 @@ function composite(targetCtx, scale, useCache) {
 function render() {
   composite(ctx, renderScale, true);
   drawSelection();
+  scheduleSave();
 }
 
 // selection box + handles in preview canvas px
@@ -655,6 +656,89 @@ function toast(msg, err) {
 }
 
 // =====================================================================
+//  SESSION PERSISTENCE (IndexedDB — survives reloads)
+// =====================================================================
+const DB_NAME = 'postcard', DB_STORE = 'kv', SESSION_KEY = 'session';
+let saveTimer = null, restoring = false;
+
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(DB_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbSet(k, v) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const t = db.transaction(DB_STORE, 'readwrite');
+    t.objectStore(DB_STORE).put(v, k);
+    t.oncomplete = () => res(); t.onerror = () => rej(t.error);
+  });
+}
+async function idbGet(k) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const t = db.transaction(DB_STORE, 'readonly');
+    const rq = t.objectStore(DB_STORE).get(k);
+    rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+  });
+}
+
+// Only serialisable fields — images are kept as their data-URL `src` and the
+// <img> is rebuilt on restore; layers reference an asset by id.
+function serializeState() {
+  return {
+    v: 1, orient: ORIENT, uid, selId,
+    assets: assets.map(a => ({ id: a.id, src: a.src, name: a.name })),
+    layers: layers.map(l => ({
+      id: l.id, assetId: l.assetId, name: l.name,
+      x: l.x, y: l.y, scale: l.scale, rot: l.rot, opacity: l.opacity, visible: l.visible,
+      dither: { ...l.dither },
+    })),
+  };
+}
+function scheduleSave() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveState, 400);   // saves ~0.4s after activity stops
+}
+async function saveState() {
+  if (restoring) return;
+  try { await idbSet(SESSION_KEY, serializeState()); } catch (_) {}
+}
+
+async function restoreState() {
+  restoring = true;
+  let s = null;
+  try { s = await idbGet(SESSION_KEY); } catch (_) {}
+  try {
+    if (s && s.assets && (s.assets.length || (s.layers && s.layers.length))) {
+      if (s.orient && s.orient !== ORIENT) { ORIENT = s.orient; updateOrientBtn(); applyFormat(); }
+      const loaded = await Promise.all(s.assets.map(a => new Promise(res => {
+        const img = new Image();
+        img.onload = () => res({ id: a.id, src: a.src, name: a.name, img });
+        img.onerror = () => res(null);
+        img.src = a.src;
+      })));
+      assets = loaded.filter(Boolean);
+      const byId = Object.fromEntries(assets.map(a => [a.id, a]));
+      layers = (s.layers || []).filter(l => byId[l.assetId]).map(l => ({
+        ...l, src: byId[l.assetId].src, img: byId[l.assetId].img, _baked: null, _bakeKey: null,
+      }));
+      uid = Math.max(s.uid || 0, 0, ...assets.map(a => a.id), ...layers.map(l => l.id)) + 1;
+      selId = (s.selId && layers.some(l => l.id === s.selId)) ? s.selId
+            : (layers.length ? layers[layers.length - 1].id : null);
+      renderThumbs(); syncBar(); render();
+    }
+  } finally {
+    restoring = false;
+  }
+  saveState();   // persist the restored (or empty) state
+}
+
+// =====================================================================
 //  WIRE UP
 // =====================================================================
 function init() {
@@ -700,6 +784,7 @@ function init() {
   fetchConfig();   // decides local (print) vs queue (send to print); loads printers when local
   syncBar();
   renderThumbs();
+  restoreState();  // bring back the previous session (library + canvas) if any
 }
 
 init();
