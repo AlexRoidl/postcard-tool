@@ -75,7 +75,7 @@ to reach your Mac directly.
 - The **public server** (dokploy, `ROLE=queue`) collects designs. Participants open
   the site, design, enter a **name**, and hit **send to print**; the job lands in a
   queue. No login — fine for a short-lived workshop site.
-- You review and approve at **`/queue`**. Only approved jobs get printed.
+- You review and approve at **`/overview`**. Only approved jobs get printed.
 - Your **Mac runs the pull agent**, which fetches approved jobs and prints them
   locally via `lp`:
 
@@ -90,7 +90,7 @@ to reach your Mac directly.
 
 Queue-server env: `ROLE=queue` and `JOBS_DIR` pointed at a mounted volume so the
 queue survives redeploys. **Optional auth** (if the site must stay up longer): set
-`ROOM_CODE` to gate submissions and `ADMIN_TOKEN` to gate `/queue` and the agent
+`ROOM_CODE` to gate submissions and `ADMIN_TOKEN` to gate `/overview` and the agent
 (pass the same `ADMIN_TOKEN` to the agent command).
 
 ## Files
@@ -98,4 +98,4 @@ queue survives redeploys. **Optional auth** (if the site must stay up longer): s
 - `server.js` — static server + `/api/printers`, `/api/add-wifi`, `/api/print`,
   the print-queue API (`/api/config`, `/api/jobs…`), and the `--agent` pull printer.
 - `public/index.html`, `public/style.css`, `public/app.js` — the editor.
-- `public/queue.html` — the facilitator queue (approve / reject prints).
+- `public/overview.html` — the facilitator overview (approve / reject prints).

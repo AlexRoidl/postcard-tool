@@ -194,7 +194,7 @@ async function runAgent() {
 
   const hdr = token ? { 'x-print-token': token } : {};
   console.log(`\n  Print agent → ${base}`);
-  console.log(`  printing ${wantStatus} jobs on "${printer}" ${auto ? '(AUTO)' : '(approve-each via /queue)'} every ${pollMs}ms\n`);
+  console.log(`  printing ${wantStatus} jobs on "${printer}" ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms\n`);
 
   async function tick() {
     try {
@@ -227,7 +227,7 @@ async function runAgent() {
 function serveStatic(req, res) {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
-  if (urlPath === '/queue' || urlPath === '/queue/') urlPath = '/queue.html';
+  if (urlPath === '/overview' || urlPath === '/overview/') urlPath = '/overview.html';
   const filePath = path.join(PUBLIC_DIR, path.normalize(urlPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403); res.end('Forbidden'); return;
