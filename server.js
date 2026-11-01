@@ -185,16 +185,20 @@ async function runAgent() {
   const token = ADMIN_TOKEN;
   const printer = process.env.PRINTER || '';
   const auto = process.argv.includes('--auto') || process.env.AUTO === '1';
+  const dry = process.argv.includes('--dry-run') || process.env.DRY_RUN === '1';
   const pollMs = Math.max(1000, Number(process.env.POLL_MS || 4000));
   const wantStatus = auto ? 'pending' : 'approved';
   const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
+  const dryDir = process.env.DRY_DIR || path.join(__dirname, 'dryrun');
 
-  if (!base)    { console.error('ERROR: set QUEUE_URL (e.g. https://tool.poetic.software)'); process.exit(1); }
-  if (!printer) { console.error('ERROR: set PRINTER (your CUPS queue, e.g. PM643_usb)');     process.exit(1); }
+  if (!base)            { console.error('ERROR: set QUEUE_URL (e.g. https://tool.poetic.software)'); process.exit(1); }
+  if (!printer && !dry) { console.error('ERROR: set PRINTER (your CUPS queue, e.g. PM643_usb)');     process.exit(1); }
+  if (dry) { try { fs.mkdirSync(dryDir, { recursive: true }); } catch (_) {} }
 
   const hdr = token ? { 'x-print-token': token } : {};
   console.log(`\n  Print agent → ${base}`);
-  console.log(`  printing ${wantStatus} jobs on "${printer}" ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms\n`);
+  if (dry) console.log(`  DRY RUN — no printer; approved jobs are fetched and saved to ${dryDir} (marked done, nothing prints)`);
+  console.log(`  printing ${wantStatus} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms\n`);
 
   async function tick() {
     try {
@@ -207,7 +211,13 @@ async function runAgent() {
         const pr = await fetch(`${base}/api/jobs/${job.id}/png`, { headers: hdr });
         if (!pr.ok) { console.error('    fetch png failed:', pr.status); continue; }
         const buf = Buffer.from(await pr.arrayBuffer());
-        const result = await printImage({ pngBuffer: buf, printer, lpOptions: (job.lpOptions && job.lpOptions.length) ? job.lpOptions : defLp });
+        let result;
+        if (dry) {
+          try { fs.writeFileSync(path.join(dryDir, job.id + '.png'), buf); result = { ok: true, job: '(dry-run, not printed)' }; }
+          catch (e) { result = { ok: false, error: 'dry-run save failed: ' + e.message }; }
+        } else {
+          result = await printImage({ pngBuffer: buf, printer, lpOptions: (job.lpOptions && job.lpOptions.length) ? job.lpOptions : defLp });
+        }
         if (result.ok) {
           await fetch(`${base}/api/jobs/${job.id}/done`, { method: 'POST', headers: hdr });
           console.log(`    ✓ printed ${job.id} ${result.job || ''}`);

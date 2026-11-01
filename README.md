@@ -88,6 +88,16 @@ to reach your Mac directly.
   Add `--auto` (or `AUTO=1`) to print every submission immediately, skipping the
   approve step. `POLL_MS` sets the poll interval (default 4000).
 
+  **Test without the printer:** add `--dry-run` (or `DRY_RUN=1`). The agent still
+  polls, fetches approved jobs and marks them **done**, but instead of printing it
+  saves each design's PNG to `./dryrun/` (override with `DRY_DIR`). This exercises
+  the whole eduroam round-trip (submit → approve → agent pulls over HTTPS) so you
+  can confirm everything works on-site before the printer is there. Example:
+
+  ```bash
+  QUEUE_URL=https://tool.poetic.software node server.js --agent --dry-run
+  ```
+
 Queue-server env: `ROLE=queue` and `JOBS_DIR` pointed at a mounted volume so the
 queue survives redeploys. **Optional auth** (if the site must stay up longer): set
 `ROOM_CODE` to gate submissions and `ADMIN_TOKEN` to gate `/overview` and the agent
