@@ -269,6 +269,13 @@ function layerCorners(layer) {
   return pts.map(([x, y]) => ({ x: cx + x * cos - y * sin, y: cy + x * sin + y * cos }));
 }
 
+// Scale-independent corner offset (OUT units) from the layer centre, in local (unrotated)
+// space. Corner order matches layerCorners(): 0 TL, 1 TR, 2 BR, 3 BL.
+function cornerLocalUnit(layer, k) {
+  const hw = layer.img.naturalWidth / 2, hh = layer.img.naturalHeight / 2;
+  return { x: (k === 1 || k === 2) ? hw : -hw, y: (k === 2 || k === 3) ? hh : -hh };
+}
+
 function rotateHandle(layer) {
   const c = layerCorners(layer);
   const topMid = { x: (c[0].x + c[1].x) / 2, y: (c[0].y + c[1].y) / 2 };
@@ -434,10 +441,13 @@ board.addEventListener('pointerdown', e => {
       const a0 = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
       drag = { mode: 'rotate', a0, rot0: layer.rot }; return;
     }
-    for (const c of corners) {
-      if (dist(cpx, c) < tol) {
-        const center = { x: layer.x * renderScale, y: layer.y * renderScale };
-        drag = { mode: 'scale', d0: dist(cpx, center) || 1, s0: layer.scale }; return;
+    for (let ci = 0; ci < corners.length; ci++) {
+      if (dist(cpx, corners[ci]) < tol) {
+        // scale from the OPPOSITE corner — it stays pinned while this handle moves
+        const opp = (ci + 2) % 4;
+        const anchorOut = { x: corners[opp].x / renderScale, y: corners[opp].y / renderScale };
+        drag = { mode: 'scale', opp, anchorOut, s0: layer.scale, d0: dist(cpx, corners[opp]) || 1, rot0: layer.rot };
+        return;
       }
     }
   }
@@ -474,8 +484,13 @@ board.addEventListener('pointermove', e => {
     layer.x = drag.x0 + (out.x - drag.start.x);
     layer.y = drag.y0 + (out.y - drag.start.y);
   } else if (drag.mode === 'scale') {
-    const center = { x: layer.x * renderScale, y: layer.y * renderScale };
-    layer.scale = Math.max(0.02, Math.min(8, drag.s0 * (dist(cpx, center) / drag.d0)));
+    const anchorPx = { x: drag.anchorOut.x * renderScale, y: drag.anchorOut.y * renderScale };
+    layer.scale = Math.max(0.02, Math.min(8, drag.s0 * (dist(cpx, anchorPx) / drag.d0)));
+    // reposition the centre so the opposite (anchor) corner stays exactly put
+    const u = cornerLocalUnit(layer, drag.opp);
+    const a = drag.rot0 * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+    layer.x = drag.anchorOut.x - layer.scale * (u.x * cos - u.y * sin);
+    layer.y = drag.anchorOut.y - layer.scale * (u.x * sin + u.y * cos);
   } else if (drag.mode === 'rotate') {
     const a = Math.atan2(cpx.y - layer.y * renderScale, cpx.x - layer.x * renderScale);
     layer.rot = drag.rot0 + (a - drag.a0) * 180 / Math.PI;
