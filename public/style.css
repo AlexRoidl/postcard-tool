@@ -98,11 +98,16 @@ body {
 
 /* ---- left thumbnail strip (the images you added) ---- */
 #thumbs {
-  position: fixed; left: 14px; top: 74px; bottom: 74px; width: 72px;
+  position: fixed; left: 14px; top: 74px; bottom: 74px; width: 94px;
   display: flex; flex-direction: column; gap: 8px;
-  overflow-y: auto; z-index: 15;
+  overflow-y: auto; overflow-x: hidden; z-index: 15;
+  padding-right: 16px;              /* gap so the scrollbar stays clear of the delete buttons */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin; scrollbar-color: var(--sage) transparent;
 }
-#thumbs::-webkit-scrollbar { width: 0; }
+#thumbs::-webkit-scrollbar { width: 8px; }
+#thumbs::-webkit-scrollbar-track { background: transparent; }
+#thumbs::-webkit-scrollbar-thumb { background: var(--sage); }
 .thumb {
   position: relative; width: 72px; height: 54px; background: #fff; cursor: pointer;
   outline: 2px solid var(--muted); outline-offset: 0; flex: 0 0 auto;
@@ -200,8 +205,8 @@ select:focus, input:focus { outline: none; background: #3a0f24; }
   .btn.sq { width: 42px; height: 42px; font-size: 20px; }
 
   /* make room on the left for the thumbnail strip so the canvas never sits under it */
-  #stage { padding: 0 8px 0 70px; }
-  #thumbs { left: 8px; top: 112px; bottom: 120px; width: 56px; gap: 6px; }
+  #stage { padding: 0 8px 0 88px; }
+  #thumbs { left: 8px; top: 112px; bottom: 120px; width: 74px; gap: 6px; padding-right: 14px; }
   .thumb { width: 56px; height: 42px; }
   .thumb .del { width: 22px; height: 22px; font-size: 13px; display: block; } /* no hover on touch */
 
