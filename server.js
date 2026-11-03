@@ -186,10 +186,15 @@ async function runAgent() {
   const printer = process.env.PRINTER || '';
   const auto = process.argv.includes('--auto') || process.env.AUTO === '1';
   const dry = process.argv.includes('--dry-run') || process.env.DRY_RUN === '1';
+  const backlog = process.argv.includes('--backlog') || process.env.PRINT_BACKLOG === '1';
   const pollMs = Math.max(1000, Number(process.env.POLL_MS || 4000));
   const wantStatus = auto ? 'pending' : 'approved';
   const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
   const dryDir = process.env.DRY_DIR || path.join(__dirname, 'dryrun');
+  // only print jobs submitted after the agent started; skips the persisted
+  // backlog that would otherwise all print on the first tick. --backlog opts out.
+  const startedAt = Date.now();
+  const jobTime = (job) => job.createdAt || parseInt(String(job.id || '').split('-')[0], 36) || 0;
 
   if (!base)            { console.error('ERROR: set QUEUE_URL (e.g. https://tool.poetic.software)'); process.exit(1); }
   if (!printer && !dry) { console.error('ERROR: set PRINTER (your CUPS queue, e.g. PM643_usb)');     process.exit(1); }
@@ -198,14 +203,21 @@ async function runAgent() {
   const hdr = token ? { 'x-print-token': token } : {};
   console.log(`\n  Print agent → ${base}`);
   if (dry) console.log(`  DRY RUN — no printer; approved jobs are fetched and saved to ${dryDir} (marked done, nothing prints)`);
-  console.log(`  printing ${wantStatus} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms\n`);
+  console.log(`  printing ${wantStatus} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms`);
+  console.log(backlog ? '  including the existing backlog (--backlog)\n' : '  only jobs submitted from now on (use --backlog to also print the existing queue)\n');
 
+  let skippedOld = 0;
   async function tick() {
     try {
       const r = await fetch(`${base}/api/jobs?status=${wantStatus}`, { headers: hdr });
       if (!r.ok) { console.error('  poll failed:', r.status, r.statusText); return; }
       const { jobs = [] } = await r.json();
       for (const job of jobs) {
+        if (!backlog && jobTime(job) < startedAt) {
+          if (!(job.id in (tick._seen || (tick._seen = {})))) { tick._seen[job.id] = 1; skippedOld++;
+            console.log(`  (skipping backlog job ${job.id}${job.name ? ` — ${job.name}` : ''}; ${skippedOld} old job${skippedOld === 1 ? '' : 's'} ignored)`); }
+          continue;
+        }
         const who = job.name ? ` (${job.name})` : '';
         console.log(`  → printing ${job.id}${who} …`);
         const pr = await fetch(`${base}/api/jobs/${job.id}/png`, { headers: hdr });

@@ -88,6 +88,11 @@ to reach your Mac directly.
   Add `--auto` (or `AUTO=1`) to print every submission immediately, skipping the
   approve step. `POLL_MS` sets the poll interval (default 4000).
 
+  The agent only prints jobs **submitted after it started**, so the persisted
+  queue (old test jobs, anything already shown on `/overview`) is *not* reprinted
+  on startup — each old job is logged once and skipped. To also drain the existing
+  backlog, start with `--backlog` (or `PRINT_BACKLOG=1`).
+
   **Test without the printer:** add `--dry-run` (or `DRY_RUN=1`). The agent still
   polls, fetches approved jobs and marks them **done**, but instead of printing it
   saves each design's PNG to `./dryrun/` (override with `DRY_DIR`). This exercises
