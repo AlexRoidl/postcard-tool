@@ -98,7 +98,8 @@ function addLayerFromAsset(asset) {
     src: asset.src, img: asset.img, visible: true,
     x: OUT_W / 2, y: OUT_H / 2,
     scale, rot: 0, opacity: 1,
-    dither: { enabled: true, algo: 'floyd', brightness: 0, contrast: 0, invert: false },
+    // default: no dithering (full colour). Toggle it on per image via the dither button.
+    dither: { enabled: false, algo: 'floyd', brightness: 0, contrast: 0, invert: false },
     _baked: null, _bakeKey: null,
   };
   layers.push(layer);
