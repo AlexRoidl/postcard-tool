@@ -16,6 +16,10 @@
 
   /* settings gear (token) top-right */
   #gear { position: fixed; top: 14px; right: 16px; z-index: 60; }
+  /* reset: discard all pending from the queue, left of the gear */
+  #reset { position: fixed; top: 14px; right: 68px; z-index: 60; }
+  #reset[hidden] { display: none; }
+  #reset.armed { background: var(--err); }
   #settings { position: fixed; top: 66px; right: 16px; z-index: 60;
               background: var(--ink); color: #fff; padding: 14px; width: min(320px, 90vw);
               display: none; flex-direction: column; gap: 9px; }
@@ -77,6 +81,7 @@
 <body>
   <div id="bar"><span class="dot"></span><span id="status">connecting…</span></div>
 
+  <button id="reset" class="btn" title="Discard all pending postcards from the queue" hidden>reset</button>
   <button id="gear" class="btn sq" title="Settings">⚙</button>
   <div id="settings">
     <label>admin token</label>
@@ -103,6 +108,25 @@ $('#tok').addEventListener('change', e => {
 document.addEventListener('click', e => {
   if (!$('#settings').contains(e.target) && e.target !== $('#gear')) $('#settings').classList.remove('on');
 });
+
+// reset: discard every pending postcard from the queue (two-click confirm)
+let pendingIds = [];
+let armTimer = null;
+const resetBtn = $('#reset');
+function disarm() { resetBtn.classList.remove('armed'); resetBtn.textContent = 'reset'; if (armTimer) clearTimeout(armTimer); armTimer = null; }
+resetBtn.onclick = async () => {
+  if (!pendingIds.length) return;
+  if (!resetBtn.classList.contains('armed')) {           // first click: arm
+    resetBtn.classList.add('armed');
+    resetBtn.textContent = `discard ${pendingIds.length}?`;
+    armTimer = setTimeout(disarm, 3000);
+    return;
+  }
+  const ids = pendingIds.slice();                        // second click: discard
+  disarm();
+  await Promise.all(ids.map(id => fetch(`/api/jobs/${id}/reject`, { method: 'POST', headers: hdr() }).catch(() => {})));
+  lastKey = ''; poll();
+};
 
 // lightbox
 const light = $('#light'), lightImg = light.querySelector('img');
@@ -150,11 +174,15 @@ async function poll() {
     const r = await fetch('/api/jobs', { headers: hdr() });
     if (r.status === 401) {
       $('#status').innerHTML = '<span class="err">token required — open ⚙</span>';
-      $('#settings').classList.add('on'); return;
+      $('#settings').classList.add('on'); resetBtn.hidden = true; return;
     }
     const { jobs = [] } = await r.json();
     const show = jobs.filter(j => j.status !== 'rejected').sort((a,b) => b.createdAt - a.createdAt);
     $('#status').textContent = `${show.length} postcard${show.length===1?'':'s'} · updated ${new Date().toLocaleTimeString()}`;
+
+    pendingIds = show.filter(j => j.status === 'pending').map(j => j.id);
+    resetBtn.hidden = pendingIds.length === 0;
+    if (!resetBtn.classList.contains('armed')) resetBtn.textContent = 'reset';
 
     const key = show.map(j => j.id + ':' + j.status).join(',');
     if (key === lastKey) return;   // avoid rebuilding (keeps hover + lightbox smooth)
