@@ -93,6 +93,22 @@ to reach your Mac directly.
   on startup — each old job is logged once and skipped. To also drain the existing
   backlog, start with `--backlog` (or `PRINT_BACKLOG=1`).
 
+  **Print to a Canon Selphy CP1500 (100×148 mm postcard):** add `--selphy` (or
+  `PRINTER_PROFILE=selphy`). The agent then prints every job on 100×148 mm hagaki
+  media and **ignores the per-job options** participants submit (which default to
+  the Phomemo). It also defaults the queue name to `Canon_SELPHY_CP1500` — override
+  with `PRINTER=` if your CUPS queue is named differently:
+
+  ```bash
+  QUEUE_URL=https://tool.poetic.software PRINTER=Canon_SELPHY_CP1500 \
+  node server.js --agent --selphy
+  ```
+
+  The forced options are `-o media=jpn_hagaki_100x148mm -o fit-to-page` (colour, no
+  monochrome). If the Selphy's queue reports a different media name, override with
+  `SELPHY_LP_OPTIONS='…'`. List a queue's media with
+  `lpoptions -p Canon_SELPHY_CP1500 -l | grep -i media`.
+
   **Test without the printer:** add `--dry-run` (or `DRY_RUN=1`). The agent still
   polls, fetches approved jobs and marks them **done**, but instead of printing it
   saves each design's PNG to `./dryrun/` (override with `DRY_DIR`). This exercises
