@@ -104,8 +104,11 @@ to reach your Mac directly.
   node server.js --agent --selphy
   ```
 
-  The forced options are `-o media=jpn_hagaki_100x148mm -o fit-to-page` (colour, no
-  monochrome). If the Selphy's queue reports a different media name, override with
+  The forced options are `-o media=jpn_hagaki_100x148mm -o print-scaling=fill`
+  (colour, no monochrome). **`print-scaling=fill` = borderless:** the image fills the
+  whole sheet and the tiny 4×6-vs-100×148 overflow (~0.6 mm) is cropped, rather than
+  leaving a white hairline (which `fit-to-page` would). If the Selphy's queue reports
+  a different media name, or you want a bordered print instead, override with
   `SELPHY_LP_OPTIONS='…'`. List a queue's media with
   `lpoptions -p Canon_SELPHY_CP1500 -l | grep -i media`.
 

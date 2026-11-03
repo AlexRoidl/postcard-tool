@@ -193,7 +193,9 @@ async function runAgent() {
   // media. It's a colour dye-sub printer (no monochrome), and these options
   // OVERRIDE whatever the participant submitted (which default to the Phomemo).
   const selphy = process.argv.includes('--selphy') || process.env.PRINTER_PROFILE === 'selphy';
-  const SELPHY_LP = (process.env.SELPHY_LP_OPTIONS || '-o media=jpn_hagaki_100x148mm -o fit-to-page').trim().split(/\s+/);
+  // print-scaling=fill => borderless: the image fills the whole sheet, cropping the
+  // tiny 4x6-vs-100x148 overflow (~0.6 mm) instead of leaving a white hairline.
+  const SELPHY_LP = (process.env.SELPHY_LP_OPTIONS || '-o media=jpn_hagaki_100x148mm -o print-scaling=fill').trim().split(/\s+/);
   const printer = process.env.PRINTER || (selphy ? 'Canon_SELPHY_CP1500' : '');
   const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
   // only print jobs submitted after the agent started; skips the persisted
