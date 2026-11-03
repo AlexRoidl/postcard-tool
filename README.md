@@ -86,7 +86,9 @@ to reach your Mac directly.
   ```
 
   Add `--auto` (or `AUTO=1`) to print every submission immediately, skipping the
-  approve step. `POLL_MS` sets the poll interval (default 4000).
+  approve step. In `--auto` the agent prints both `pending` and `approved` jobs, so
+  pressing **print** in `/overview` (which approves a job) still prints it instead of
+  leaving it stuck on "printing…". `POLL_MS` sets the poll interval (default 4000).
 
   The agent only prints jobs **submitted after it started**, so the persisted
   queue (old test jobs, anything already shown on `/overview`) is *not* reprinted
@@ -104,12 +106,15 @@ to reach your Mac directly.
   node server.js --agent --selphy
   ```
 
-  The forced options are `-o media=jpn_hagaki_100x148mm -o print-scaling=fill`
-  (colour, no monochrome). **`print-scaling=fill` = borderless:** the image fills the
-  whole sheet and the tiny 4×6-vs-100×148 overflow (~0.6 mm) is cropped, rather than
-  leaving a white hairline (which `fit-to-page` would). If the Selphy's queue reports
-  a different media name, or you want a bordered print instead, override with
-  `SELPHY_LP_OPTIONS='…'`. List a queue's media with
+  The forced options are
+  `-o media=jpn_hagaki_100x148mm -o print-scaling=fill -o print-color-mode=color`.
+  **`print-scaling=fill` = borderless:** the image fills the whole sheet and the tiny
+  4×6-vs-100×148 overflow (~0.6 mm) is cropped, rather than leaving a white hairline
+  (which `fit-to-page` would). **`print-color-mode=color`** forces colour — without
+  `--selphy` the agent passes the participant's Phomemo options, which include
+  `print-color-mode=monochrome` and print a colour postcard as black & white. If the
+  Selphy's queue reports a different media name, or you want a bordered print instead,
+  override with `SELPHY_LP_OPTIONS='…'`. List a queue's media with
   `lpoptions -p Canon_SELPHY_CP1500 -l | grep -i media`.
 
   **Test without the printer:** add `--dry-run` (or `DRY_RUN=1`). The agent still

@@ -187,7 +187,10 @@ async function runAgent() {
   const dry = process.argv.includes('--dry-run') || process.env.DRY_RUN === '1';
   const backlog = process.argv.includes('--backlog') || process.env.PRINT_BACKLOG === '1';
   const pollMs = Math.max(1000, Number(process.env.POLL_MS || 4000));
-  const wantStatus = auto ? 'pending' : 'approved';
+  // In AUTO we print 'pending' jobs on sight; we ALSO take 'approved', so pressing
+  // "print" in /overview (which approves) still prints instead of stranding the job.
+  // Without AUTO we only print what the facilitator explicitly approved.
+  const wantSet = auto ? ['pending', 'approved'] : ['approved'];
   const dryDir = process.env.DRY_DIR || path.join(__dirname, 'dryrun');
   // Canon Selphy CP1500 profile: print every job on 100×148 mm postcard (hagaki)
   // media. It's a colour dye-sub printer (no monochrome), and these options
@@ -195,7 +198,9 @@ async function runAgent() {
   const selphy = process.argv.includes('--selphy') || process.env.PRINTER_PROFILE === 'selphy';
   // print-scaling=fill => borderless: the image fills the whole sheet, cropping the
   // tiny 4x6-vs-100x148 overflow (~0.6 mm) instead of leaving a white hairline.
-  const SELPHY_LP = (process.env.SELPHY_LP_OPTIONS || '-o media=jpn_hagaki_100x148mm -o print-scaling=fill').trim().split(/\s+/);
+  // print-color-mode=color => force colour (the Phomemo default is monochrome, which
+  // would otherwise desaturate a colour postcard to black & white).
+  const SELPHY_LP = (process.env.SELPHY_LP_OPTIONS || '-o media=jpn_hagaki_100x148mm -o print-scaling=fill -o print-color-mode=color').trim().split(/\s+/);
   const printer = process.env.PRINTER || (selphy ? 'Canon_SELPHY_CP1500' : '');
   const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
   // only print jobs submitted after the agent started; skips the persisted
@@ -210,17 +215,18 @@ async function runAgent() {
   const hdr = token ? { 'x-print-token': token } : {};
   console.log(`\n  Print agent → ${base}`);
   if (dry) console.log(`  DRY RUN — no printer; approved jobs are fetched and saved to ${dryDir} (marked done, nothing prints)`);
-  console.log(`  printing ${wantStatus} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms`);
+  console.log(`  printing ${wantSet.join('+')} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms`);
   if (selphy) console.log(`  Canon Selphy CP1500 profile — 100×148 mm postcard, forcing: ${SELPHY_LP.join(' ')}`);
   console.log(backlog ? '  including the existing backlog (--backlog)\n' : '  only jobs submitted from now on (use --backlog to also print the existing queue)\n');
 
   let skippedOld = 0;
   async function tick() {
     try {
-      const r = await fetch(`${base}/api/jobs?status=${wantStatus}`, { headers: hdr });
+      const r = await fetch(`${base}/api/jobs`, { headers: hdr });
       if (!r.ok) { console.error('  poll failed:', r.status, r.statusText); return; }
       const { jobs = [] } = await r.json();
-      for (const job of jobs) {
+      const queue = jobs.filter(j => wantSet.includes(j.status)).sort((a, b) => jobTime(a) - jobTime(b));
+      for (const job of queue) {
         if (!backlog && jobTime(job) < startedAt) {
           if (!(job.id in (tick._seen || (tick._seen = {})))) { tick._seen[job.id] = 1; skippedOld++;
             console.log(`  (skipping backlog job ${job.id}${job.name ? ` — ${job.name}` : ''}; ${skippedOld} old job${skippedOld === 1 ? '' : 's'} ignored)`); }
