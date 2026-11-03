@@ -192,19 +192,27 @@ async function runAgent() {
   // Without AUTO we only print what the facilitator explicitly approved.
   const wantSet = auto ? ['pending', 'approved'] : ['approved'];
   const dryDir = process.env.DRY_DIR || path.join(__dirname, 'dryrun');
-  // Canon Selphy CP1500 profile: print every job on 100×148 mm postcard (hagaki)
-  // media. It's a colour dye-sub printer (no monochrome), and these options
-  // OVERRIDE whatever the participant submitted (which default to the Phomemo).
-  const selphy = process.argv.includes('--selphy') || process.env.PRINTER_PROFILE === 'selphy';
+  // Print profile, auto-picked from the printer NAME (override with PRINTER_PROFILE
+  // or --selphy). The chosen profile's lp options OVERRIDE whatever the participant
+  // submitted, so the Phomemo's monochrome default never leaks onto the colour Selphy
+  // and vice versa:
+  //   selphy  -> 100x148 mm postcard, borderless (print-scaling=fill), colour
+  //   phomemo -> 6x4" thermal label (w288h432), monochrome  [= DEFAULT_LP / LP_OPTIONS]
   // print-scaling=fill => borderless: the image fills the whole sheet, cropping the
   // tiny 4x6-vs-100x148 overflow (~0.6 mm) instead of leaving a white hairline.
-  // print-color-mode=color => force colour (the Phomemo default is monochrome, which
-  // would otherwise desaturate a colour postcard to black & white).
   const SELPHY_LP = (process.env.SELPHY_LP_OPTIONS || '-o media=jpn_hagaki_100x148mm -o print-scaling=fill -o print-color-mode=color').trim().split(/\s+/);
-  const printer = process.env.PRINTER || (selphy ? 'Canon_SELPHY_CP1500' : '');
   const defLp = (process.env.LP_OPTIONS || DEFAULT_LP).trim().split(/\s+/);
-  // only print jobs submitted after the agent started; skips the persisted
-  // backlog that would otherwise all print on the first tick. --backlog opts out.
+  const forcedProfile = (process.argv.includes('--selphy') || process.env.PRINTER_PROFILE === 'selphy') ? 'selphy'
+                      : (process.env.PRINTER_PROFILE === 'phomemo') ? 'phomemo' : '';
+  const printer = process.env.PRINTER || (forcedProfile === 'selphy' ? 'Canon_SELPHY_CP1500' : '');
+  const detectProfile = (name) => /selphy|cp-?1500/i.test(name) ? 'selphy'
+                                 : /pm-?643|pm-?241|phomemo/i.test(name) ? 'phomemo' : '';
+  const profile = forcedProfile || detectProfile(printer);
+  const profileLp = profile === 'selphy' ? SELPHY_LP : profile === 'phomemo' ? defLp : null;
+  // Don't AUTO-pick-up pending jobs submitted before the agent started (that would
+  // drain the persisted backlog on the first tick). This only gates auto-pickup of
+  // 'pending' — an 'approved' job is an explicit facilitator decision and always
+  // prints regardless of age. --backlog opts out and auto-prints old pending too.
   const startedAt = Date.now();
   const jobTime = (job) => job.createdAt || parseInt(String(job.id || '').split('-')[0], 36) || 0;
 
@@ -216,7 +224,8 @@ async function runAgent() {
   console.log(`\n  Print agent → ${base}`);
   if (dry) console.log(`  DRY RUN — no printer; approved jobs are fetched and saved to ${dryDir} (marked done, nothing prints)`);
   console.log(`  printing ${wantSet.join('+')} jobs ${dry ? '(dry-run)' : `on "${printer}"`} ${auto ? '(AUTO)' : '(approve-each via /overview)'} every ${pollMs}ms`);
-  if (selphy) console.log(`  Canon Selphy CP1500 profile — 100×148 mm postcard, forcing: ${SELPHY_LP.join(' ')}`);
+  if (profile) console.log(`  profile: ${profile} ${forcedProfile ? '(forced)' : '(from printer name)'} → forcing ${profileLp.join(' ')}`);
+  else console.log(`  profile: none (printer name unrecognised) → using each job's own lp options`);
   console.log(backlog ? '  including the existing backlog (--backlog)\n' : '  only jobs submitted from now on (use --backlog to also print the existing queue)\n');
 
   let skippedOld = 0;
@@ -227,9 +236,10 @@ async function runAgent() {
       const { jobs = [] } = await r.json();
       const queue = jobs.filter(j => wantSet.includes(j.status)).sort((a, b) => jobTime(a) - jobTime(b));
       for (const job of queue) {
-        if (!backlog && jobTime(job) < startedAt) {
+        // backlog filter applies only to auto-pickup of pending; approved always prints
+        if (!backlog && job.status === 'pending' && jobTime(job) < startedAt) {
           if (!(job.id in (tick._seen || (tick._seen = {})))) { tick._seen[job.id] = 1; skippedOld++;
-            console.log(`  (skipping backlog job ${job.id}${job.name ? ` — ${job.name}` : ''}; ${skippedOld} old job${skippedOld === 1 ? '' : 's'} ignored)`); }
+            console.log(`  (skipping backlog job ${job.id}${job.name ? ` — ${job.name}` : ''}; approve it in /overview to print anyway; ${skippedOld} old pending ignored)`); }
           continue;
         }
         const who = job.name ? ` (${job.name})` : '';
@@ -242,7 +252,7 @@ async function runAgent() {
           try { fs.writeFileSync(path.join(dryDir, job.id + '.png'), buf); result = { ok: true, job: '(dry-run, not printed)' }; }
           catch (e) { result = { ok: false, error: 'dry-run save failed: ' + e.message }; }
         } else {
-          const lpOptions = selphy ? SELPHY_LP : ((job.lpOptions && job.lpOptions.length) ? job.lpOptions : defLp);
+          const lpOptions = profileLp || ((job.lpOptions && job.lpOptions.length) ? job.lpOptions : defLp);
           result = await printImage({ pngBuffer: buf, printer, lpOptions });
         }
         if (result.ok) {

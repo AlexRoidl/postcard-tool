@@ -90,32 +90,38 @@ to reach your Mac directly.
   pressing **print** in `/overview` (which approves a job) still prints it instead of
   leaving it stuck on "printing…". `POLL_MS` sets the poll interval (default 4000).
 
-  The agent only prints jobs **submitted after it started**, so the persisted
-  queue (old test jobs, anything already shown on `/overview`) is *not* reprinted
-  on startup — each old job is logged once and skipped. To also drain the existing
-  backlog, start with `--backlog` (or `PRINT_BACKLOG=1`).
+  To avoid reprinting the persisted queue on startup, the agent does **not**
+  auto-pick-up *pending* jobs that were submitted before it started (old test jobs,
+  anything already sitting on `/overview`) — each is logged once and skipped. An
+  **approved** job always prints regardless of age, because approving it in
+  `/overview` is an explicit decision. To also auto-print the old pending backlog,
+  start with `--backlog` (or `PRINT_BACKLOG=1`).
 
-  **Print to a Canon Selphy CP1500 (100×148 mm postcard):** add `--selphy` (or
-  `PRINTER_PROFILE=selphy`). The agent then prints every job on 100×148 mm hagaki
-  media and **ignores the per-job options** participants submit (which default to
-  the Phomemo). It also defaults the queue name to `Canon_SELPHY_CP1500` — override
-  with `PRINTER=` if your CUPS queue is named differently:
+### Printer profile (colour vs monochrome, media)
+
+  The agent picks a **print profile from the printer name** and forces matching `lp`
+  options, overriding whatever the participant submitted (so the Phomemo's monochrome
+  default never leaks onto the colour Selphy, and vice versa):
+
+  | Printer name matches        | Profile   | Forced `lp` options |
+  |-----------------------------|-----------|---------------------|
+  | `selphy` / `cp1500`         | `selphy`  | `-o media=jpn_hagaki_100x148mm -o print-scaling=fill -o print-color-mode=color` |
+  | `pm643` / `pm241` / `phomemo` | `phomemo` | `-o PageSize=w288h432 -o print-color-mode=monochrome` |
+  | anything else               | none      | each job's own options (falls back to `LP_OPTIONS`) |
+
+  So for the Canon Selphy CP1500 (100×148 mm postcard, borderless colour) just point
+  the agent at the Selphy queue — no flag needed:
 
   ```bash
-  QUEUE_URL=https://tool.poetic.software PRINTER=Canon_SELPHY_CP1500 \
-  node server.js --agent --selphy
+  QUEUE_URL=https://tool.poetic.software PRINTER=Canon_SELPHY_CP1500 node server.js --agent
   ```
 
-  The forced options are
-  `-o media=jpn_hagaki_100x148mm -o print-scaling=fill -o print-color-mode=color`.
   **`print-scaling=fill` = borderless:** the image fills the whole sheet and the tiny
-  4×6-vs-100×148 overflow (~0.6 mm) is cropped, rather than leaving a white hairline
-  (which `fit-to-page` would). **`print-color-mode=color`** forces colour — without
-  `--selphy` the agent passes the participant's Phomemo options, which include
-  `print-color-mode=monochrome` and print a colour postcard as black & white. If the
-  Selphy's queue reports a different media name, or you want a bordered print instead,
-  override with `SELPHY_LP_OPTIONS='…'`. List a queue's media with
-  `lpoptions -p Canon_SELPHY_CP1500 -l | grep -i media`.
+  4×6-vs-100×148 overflow (~0.6 mm) is cropped, rather than leaving a white hairline.
+  Force a profile regardless of name with `PRINTER_PROFILE=selphy|phomemo` (or the
+  `--selphy` alias). If the Selphy's queue reports a different media name, or you want
+  a bordered print, override the selphy options with `SELPHY_LP_OPTIONS='…'`; list a
+  queue's media with `lpoptions -p Canon_SELPHY_CP1500 -l | grep -i media`.
 
   **Test without the printer:** add `--dry-run` (or `DRY_RUN=1`). The agent still
   polls, fetches approved jobs and marks them **done**, but instead of printing it
